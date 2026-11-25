@@ -3,7 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart' hide Person;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    hide Person;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -31,7 +32,11 @@ class FiwiApp extends StatelessWidget {
       title: 'FIWICHAT',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: brand, useMaterial3: true),
-      darkTheme: ThemeData(colorSchemeSeed: brand, useMaterial3: true, brightness: Brightness.dark),
+      darkTheme: ThemeData(
+        colorSchemeSeed: brand,
+        useMaterial3: true,
+        brightness: Brightness.dark,
+      ),
       home: home ?? const StartScreen(),
     );
   }
@@ -90,7 +95,9 @@ class AppServices {
         ),
       );
       await _notifs
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.requestNotificationsPermission();
       // Seuls les messages qui me sont destinés arrivent ici (jamais ceux que je relaie).
       mesh.notices.listen((n) {
@@ -168,13 +175,15 @@ class _StartScreenState extends State<StartScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Impossible de démarrer le réseau : $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Impossible de démarrer le réseau : $e')),
+      );
       return;
     }
     if (!mounted) return;
-    Navigator.of(context)
-        .pushReplacement(MaterialPageRoute(builder: (_) => HomeScreen(services: services)));
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => HomeScreen(services: services)),
+    );
   }
 
   @override
@@ -197,7 +206,10 @@ class _StartScreenState extends State<StartScreen> {
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
-                      const Text('Discute par Wi-Fi, sans internet.', textAlign: TextAlign.center),
+                      const Text(
+                        'Discute par Wi-Fi, sans internet.',
+                        textAlign: TextAlign.center,
+                      ),
                       const SizedBox(height: 32),
                       TextField(
                         controller: _name,
@@ -212,7 +224,10 @@ class _StartScreenState extends State<StartScreen> {
                       const SizedBox(height: 16),
                       SizedBox(
                         width: double.infinity,
-                        child: FilledButton(onPressed: _go, child: const Text('Commencer')),
+                        child: FilledButton(
+                          onPressed: _go,
+                          child: const Text('Commencer'),
+                        ),
                       ),
                     ],
                   ),
@@ -223,19 +238,11 @@ class _StartScreenState extends State<StartScreen> {
   }
 }
 
-/// Ouvre le partage Android de l'APK, avec un message si ça ne marche pas.
-Future<void> _share(BuildContext context) async {
-  final ok = await shareApp();
-  if (!ok && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Partage impossible ici. Utilise le mode invité : '
-          'la page du navigateur propose « Télécharger FIWICHAT ».',
-        ),
-      ),
-    );
-  }
+/// Ouvre l'écran « Partager FIWICHAT ».
+void _share(BuildContext context, AppServices services) {
+  Navigator.of(
+    context,
+  ).push(MaterialPageRoute(builder: (_) => ShareAppScreen(services: services)));
 }
 
 // ======================= Liste des conversations =======================
@@ -251,9 +258,14 @@ class HomeScreen extends StatelessWidget {
       stream: mesh.changes,
       builder: (context, _) {
         final online = mesh.people.values.where((p) => p.online).toList()
-          ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          ..sort(
+            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+          );
         final offline = mesh.people.values
-            .where((p) => !p.online && (mesh.conversations[p.id]?.isNotEmpty ?? false))
+            .where(
+              (p) =>
+                  !p.online && (mesh.conversations[p.id]?.isNotEmpty ?? false),
+            )
             .toList();
         final n = online.length;
         return Scaffold(
@@ -261,9 +273,13 @@ class HomeScreen extends StatelessWidget {
             title: const Text('FIWICHAT'),
             actions: [
               IconButton(
-                icon: const Icon(Icons.share),
-                tooltip: 'Partager l\'appli',
-                onPressed: () => _share(context),
+                icon: const Icon(Icons.qr_code_2),
+                tooltip: 'Inviter dans le navigateur',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => GuestScreen(services: services),
+                  ),
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.info_outline),
@@ -275,15 +291,24 @@ class HomeScreen extends StatelessWidget {
               ),
             ],
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () =>
-                Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => GuestScreen(services: services))),
-            icon: const Icon(Icons.qr_code_2),
-            label: const Text('Inviter'),
+          floatingActionButtonLocation:
+              FloatingActionButtonLocation.centerFloat,
+          floatingActionButton: SizedBox(
+            height: 64,
+            child: FloatingActionButton.extended(
+              key: const Key('share-big'),
+              onPressed: () => _share(context, services),
+              backgroundColor: brand,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.send_to_mobile, size: 28),
+              label: const Text(
+                'Partager FIWICHAT',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
           ),
           body: ListView(
-            padding: const EdgeInsets.only(bottom: 96),
+            padding: const EdgeInsets.only(bottom: 110),
             children: [
               _LinksBar(mesh: mesh),
               if (mesh.nameUsedByOther(mesh.myName))
@@ -292,7 +317,9 @@ class HomeScreen extends StatelessWidget {
                   color: Theme.of(context).colorScheme.tertiaryContainer,
                   child: ListTile(
                     leading: const Icon(Icons.warning_amber_rounded),
-                    title: Text('Quelqu\'un d\'autre s\'appelle aussi « ${mesh.myName} »'),
+                    title: Text(
+                      'Quelqu\'un d\'autre s\'appelle aussi « ${mesh.myName} »',
+                    ),
                     subtitle: Text(
                       'Ton code #${mesh.myTag} vous distingue. Tu peux aussi changer de pseudo.',
                     ),
@@ -327,7 +354,7 @@ class HomeScreen extends StatelessWidget {
                         'Recherche des téléphones FIWICHAT autour de toi...\n\n'
                         'Ils apparaissent tout seuls s\'ils sont sur le même Wi-Fi, '
                         'ou à proximité avec FIWICHAT ouvert. '
-                        'Quelqu\'un n\'a pas l\'appli ? Touche « Inviter ».',
+                        'Quelqu\'un n\'a pas l\'appli ? Touche « Partager FIWICHAT » en bas.',
                         textAlign: TextAlign.center,
                       ),
                     ],
@@ -338,7 +365,10 @@ class HomeScreen extends StatelessWidget {
                   context,
                   avatar: Text(
                     p.name.isEmpty ? '?' : p.name[0].toUpperCase(),
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                   title: p.name,
                   subtitle:
@@ -352,7 +382,8 @@ class HomeScreen extends StatelessWidget {
                   context,
                   avatar: Text(p.name.isEmpty ? '?' : p.name[0].toUpperCase()),
                   title: p.name,
-                  subtitle: '#${p.tag}${p.verified ? ' ✓ vérifié' : ''} · hors de portée',
+                  subtitle:
+                      '#${p.tag}${p.verified ? ' ✓ vérifié' : ''} · hors de portée',
                   convoTitle: '${p.name} #${p.tag}',
                   convo: p.id,
                 ),
@@ -386,7 +417,8 @@ class HomeScreen extends StatelessWidget {
           : const Icon(Icons.chevron_right),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => ChatScreen(mesh: mesh, convo: convo, title: convoTitle ?? title),
+          builder: (_) =>
+              ChatScreen(mesh: mesh, convo: convo, title: convoTitle ?? title),
         ),
       ),
     );
@@ -426,7 +458,12 @@ class _LinksBar extends StatelessWidget {
 // ======================= Conversation =======================
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.mesh, required this.convo, required this.title});
+  const ChatScreen({
+    super.key,
+    required this.mesh,
+    required this.convo,
+    required this.title,
+  });
   final MeshNode mesh;
   final String convo;
   final String title;
@@ -468,7 +505,9 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            Flexible(child: Text(widget.title, overflow: TextOverflow.ellipsis)),
+            Flexible(
+              child: Text(widget.title, overflow: TextOverflow.ellipsis),
+            ),
             if (person?.verified ?? false)
               const Padding(
                 padding: EdgeInsets.only(left: 6),
@@ -484,7 +523,8 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: () async {
                 await showDialog(
                   context: context,
-                  builder: (_) => VerifyDialog(mesh: widget.mesh, person: person),
+                  builder: (_) =>
+                      VerifyDialog(mesh: widget.mesh, person: person),
                 );
                 setState(() {});
               },
@@ -512,7 +552,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 builder: (context, _) {
                   final msgs = widget.mesh.conversations[widget.convo] ?? [];
                   if (msgs.isEmpty) {
-                    return const Center(child: Text('Aucun message. Dis bonjour !'));
+                    return const Center(
+                      child: Text('Aucun message. Dis bonjour !'),
+                    );
                   }
                   return ListView.builder(
                     reverse: true,
@@ -523,13 +565,18 @@ class _ChatScreenState extends State<ChatScreen> {
                       final time =
                           '${m.time.hour.toString().padLeft(2, '0')}:${m.time.minute.toString().padLeft(2, '0')}';
                       return Align(
-                        alignment: m.mine ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment: m.mine
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
                         child: Container(
                           constraints: BoxConstraints(
                             maxWidth: MediaQuery.of(context).size.width * 0.78,
                           ),
                           margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
                           decoration: BoxDecoration(
                             color: m.mine
                                 ? scheme.primaryContainer
@@ -548,7 +595,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                     fontSize: 13,
                                   ),
                                 ),
-                              Text(m.text, style: const TextStyle(fontSize: 16)),
+                              Text(
+                                m.text,
+                                style: const TextStyle(fontSize: 16),
+                              ),
                               const SizedBox(height: 2),
                               Text(
                                 m.failed
@@ -556,7 +606,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                     : (m.delivered ? '$time · ✓ reçu' : time),
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: m.failed ? scheme.error : scheme.onSurfaceVariant,
+                                  color: m.failed
+                                      ? scheme.error
+                                      : scheme.onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -585,13 +637,19 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderRadius: BorderRadius.circular(24),
                           borderSide: BorderSide.none,
                         ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
                       ),
                       onSubmitted: (_) => _send(),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filled(onPressed: _send, icon: const Icon(Icons.send)),
+                  IconButton.filled(
+                    onPressed: _send,
+                    icon: const Icon(Icons.send),
+                  ),
                 ],
               ),
             ),
@@ -611,7 +669,11 @@ class VerifyDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const mono = TextStyle(fontFamily: 'monospace', fontSize: 18, fontWeight: FontWeight.bold);
+    const mono = TextStyle(
+      fontFamily: 'monospace',
+      fontSize: 18,
+      fontWeight: FontWeight.bold,
+    );
     return AlertDialog(
       title: Text('Vérifier ${person.name}'),
       content: SingleChildScrollView(
@@ -645,7 +707,10 @@ class VerifyDialog extends StatelessWidget {
             },
             child: const Text('Retirer la vérification'),
           ),
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Fermer')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Fermer'),
+        ),
         if (!person.verified)
           FilledButton(
             onPressed: () {
@@ -687,7 +752,9 @@ class _GuestScreenState extends State<GuestScreen> {
   @override
   Widget build(BuildContext context) {
     final h = guests.hotspot;
-    final lanIps = widget.services.lan.myAddresses.where((a) => !a.startsWith('192.168.49.'));
+    final lanIps = widget.services.lan.myAddresses.where(
+      (a) => !a.startsWith('192.168.49.'),
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('Inviter quelqu\'un')),
       body: ListView(
@@ -726,7 +793,10 @@ class _GuestScreenState extends State<GuestScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Réseau : ${h.ssid}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    'Réseau : ${h.ssid}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   Text(
                     'Mot de passe : ${h.password}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
@@ -746,7 +816,10 @@ class _GuestScreenState extends State<GuestScreen> {
                 children: [
                   SelectableText(
                     h.url,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Center(child: _Qr(h.url)),
@@ -768,11 +841,14 @@ class _GuestScreenState extends State<GuestScreen> {
                     'Ou scanner ce code une fois connecté au Wi-Fi :',
                   ),
                   const SizedBox(height: 8),
-                  Center(child: _Qr('${h.url}/fiwichat.apk')),
+                  Center(child: _Qr(h.installerUrl)),
                 ],
               ),
             ),
-            OutlinedButton(onPressed: _close, child: const Text('Fermer le réseau invité')),
+            OutlinedButton(
+              onPressed: _close,
+              child: const Text('Fermer le réseau invité'),
+            ),
           ],
           const SizedBox(height: 24),
           const Divider(),
@@ -782,9 +858,9 @@ class _GuestScreenState extends State<GuestScreen> {
           ),
           const SizedBox(height: 8),
           FilledButton.tonalIcon(
-            onPressed: () => _share(context),
-            icon: const Icon(Icons.share),
-            label: const Text('Partager l\'appli (Quick Share, Bluetooth…)'),
+            onPressed: () => _share(context, widget.services),
+            icon: const Icon(Icons.send_to_mobile),
+            label: const Text('Partager FIWICHAT'),
           ),
           const SizedBox(height: 4),
           const Text(
@@ -794,7 +870,9 @@ class _GuestScreenState extends State<GuestScreen> {
           if (lanIps.isNotEmpty) ...[
             const SizedBox(height: 24),
             const Divider(),
-            const Text('Déjà sur le même Wi-Fi que toi ? Il suffit d\'ouvrir :'),
+            const Text(
+              'Déjà sur le même Wi-Fi que toi ? Il suffit d\'ouvrir :',
+            ),
             for (final ip in lanIps)
               SelectableText(
                 'http://$ip:$kGuestPort',
@@ -829,7 +907,13 @@ class _Step extends StatelessWidget {
                 child: Text('$n'),
               ),
               const SizedBox(width: 10),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -849,6 +933,330 @@ class _Qr extends StatelessWidget {
     padding: const EdgeInsets.all(8),
     child: QrImageView(data: data, size: 180),
   );
+}
+
+// ======================= Partager FIWICHAT =======================
+
+class ShareAppScreen extends StatelessWidget {
+  const ShareAppScreen({super.key, required this.services});
+  final AppServices services;
+
+  Future<void> _send(BuildContext context, String? via) async {
+    final ok = await shareApp(via: via);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ça n\'a pas marché ici. Utilise plutôt « Avec un QR code ».',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Partager FIWICHAT')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        children: [
+          const Text(
+            'Donne l\'appli à quelqu\'un à côté de toi. Pas besoin d\'internet.',
+            style: TextStyle(fontSize: 17),
+          ),
+          const SizedBox(height: 16),
+          _BigChoice(
+            key: const Key('share-quick'),
+            icon: Icons.near_me,
+            title: 'Envoyer à côté',
+            subtitle: 'Avec Quick Share. Le plus rapide.',
+            onTap: () => _send(context, 'quickshare'),
+          ),
+          const SizedBox(height: 12),
+          _BigChoice(
+            key: const Key('share-qr'),
+            icon: Icons.qr_code_2,
+            title: 'Avec un QR code',
+            subtitle: 'L\'autre scanne avec son appareil photo. Marche sur tous les Android.',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => QrInstallScreen(services: services),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            children: [
+              TextButton.icon(
+                onPressed: () => _send(context, 'bluetooth'),
+                icon: const Icon(Icons.bluetooth),
+                label: const Text('Par Bluetooth'),
+              ),
+              TextButton.icon(
+                onPressed: () => _send(context, null),
+                icon: const Icon(Icons.more_horiz),
+                label: const Text('Autres façons'),
+              ),
+              TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => GuestScreen(services: services),
+                  ),
+                ),
+                icon: const Icon(Icons.phone_iphone),
+                label: const Text('Il a un iPhone'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Avec Quick Share',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '• L\'autre téléphone doit avoir le Bluetooth et la localisation allumés.\n'
+                    '• Sur l\'autre téléphone : glisser du haut de l\'écran, appuyer sur '
+                    '« Quick Share » et choisir « Tout le monde ».\n'
+                    '• Ici, choisis son téléphone dans la liste. Il appuie sur « Accepter ».\n'
+                    '• Ça ne marche pas ? Prends « Avec un QR code ».',
+                    style: TextStyle(color: muted, height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const ReceiverSteps(),
+        ],
+      ),
+    );
+  }
+}
+
+class _BigChoice extends StatelessWidget {
+  const _BigChoice({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String title, subtitle;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: brand,
+    borderRadius: BorderRadius.circular(20),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            Icon(icon, size: 44, color: Colors.white),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 21,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white, size: 30),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Ce que doit faire la personne qui reçoit le fichier (à lui montrer).
+class ReceiverSteps extends StatelessWidget {
+  const ReceiverSteps({super.key});
+  static const steps = [
+    'Ouvrir le fichier fiwichat.apk reçu (notification, ou Fichiers › Téléchargements).',
+    'Si Android bloque : « Paramètres », activer « Autoriser cette source », puis revenir.',
+    'Appuyer sur « Installer ».',
+    'Si Play Protect s\'affiche : « Plus de détails » puis « Installer quand même ».',
+    'Ouvrir FIWICHAT, choisir un pseudo, et appuyer sur « Autoriser » partout.',
+  ];
+  @override
+  Widget build(BuildContext context) => Card(
+    color: Theme.of(context).colorScheme.secondaryContainer,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Pour la personne qui reçoit',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 10),
+          for (var i = 0; i < steps.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 13,
+                    backgroundColor: brand,
+                    foregroundColor: Colors.white,
+                    child: Text(
+                      '${i + 1}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(steps[i], style: const TextStyle(fontSize: 15)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Partage par QR code : le téléphone ouvre son propre Wi-Fi, l'autre scanne deux codes.
+class QrInstallScreen extends StatefulWidget {
+  const QrInstallScreen({super.key, required this.services});
+  final AppServices services;
+  @override
+  State<QrInstallScreen> createState() => _QrInstallScreenState();
+}
+
+class _QrInstallScreenState extends State<QrInstallScreen> {
+  bool _busy = false;
+  GuestServer get guests => widget.services.guests;
+
+  @override
+  void initState() {
+    super.initState();
+    if (guests.hotspot == null) _open();
+  }
+
+  Future<void> _open() async {
+    setState(() => _busy = true);
+    await NearbyTransport.requestPermissions();
+    await guests.openHotspot();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final h = guests.hotspot;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Partager avec un QR code')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        children: [
+          if (h == null) ...[
+            const SizedBox(height: 24),
+            if (_busy) ...[
+              const Center(child: CircularProgressIndicator()),
+              const SizedBox(height: 16),
+              const Text(
+                'Préparation du Wi-Fi FIWICHAT…',
+                textAlign: TextAlign.center,
+              ),
+            ] else ...[
+              Text(
+                guests.error == null
+                    ? 'Le Wi-Fi FIWICHAT n\'a pas pu s\'ouvrir.'
+                    : 'Le Wi-Fi FIWICHAT n\'a pas pu s\'ouvrir : ${guests.error}',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Vérifie que le Wi-Fi et la localisation sont allumés, puis réessaie.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton(onPressed: _open, child: const Text('Réessayer')),
+            ],
+          ] else ...[
+            const Text(
+              'Montre cet écran à l\'autre personne. Elle ouvre son appareil photo et scanne.',
+              style: TextStyle(fontSize: 17),
+            ),
+            const SizedBox(height: 12),
+            _Step(
+              n: 1,
+              title: 'Scanner pour se connecter au Wi-Fi',
+              child: Column(
+                children: [
+                  Center(child: _Qr(h.wifiQr)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Puis appuyer sur « Se connecter ». S\'il dit « pas d\'internet », '
+                    'choisir « Rester connecté ».',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Ou à la main : réseau ${h.ssid}, mot de passe ${h.password}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            _Step(
+              n: 2,
+              title: 'Scanner pour télécharger',
+              child: Column(
+                children: [
+                  Center(child: _Qr(h.installerUrl)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Une page s\'ouvre avec un gros bouton vert « Télécharger FIWICHAT ».',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'La page ne s\'ouvre pas ? Couper les données mobiles un instant, ou taper '
+                    '${h.installerUrl}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const ReceiverSteps(),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 // ======================= Connexion manuelle =======================
@@ -877,8 +1285,14 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
           onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Annuler')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('OK')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('OK'),
+          ),
         ],
       ),
     );
@@ -886,7 +1300,8 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
     if (n.isEmpty) return;
     if (widget.services.mesh.nameUsedByOther(n)) {
       setState(
-        () => _result = '« $n » est déjà pris par quelqu\'un à portée. Choisis un autre pseudo.',
+        () => _result =
+            '« $n » est déjà pris par quelqu\'un à portée. Choisis un autre pseudo.',
       );
       return;
     }
@@ -935,19 +1350,27 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
             const SizedBox(height: 8),
             TextField(
               controller: _ip,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
                 hintText: 'ex : 192.168.1.23',
                 border: OutlineInputBorder(),
               ),
             ),
             if (_result != null)
-              Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!)),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(_result!),
+              ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Fermer')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Fermer'),
+        ),
         FilledButton(
           onPressed: () => setState(
             () => _result = widget.services.lan.connectManually(_ip.text)

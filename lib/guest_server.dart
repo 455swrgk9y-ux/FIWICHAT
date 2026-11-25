@@ -20,6 +20,7 @@ class GuestHotspot {
   final String ssid, password, ip;
   String get url => 'http://$ip:$kGuestPort';
   String get wifiQr => 'WIFI:T:WPA;S:$ssid;P:$password;;';
+  String get installerUrl => '$url/installer';
 }
 
 class GuestServer {
@@ -41,14 +42,21 @@ class GuestServer {
     try {
       apkPath = await _channel.invokeMethod<String>('getApkPath');
     } catch (_) {}
-    _http = await serveGuests(mesh, html: html, nacl: nacl, apkPath: () => apkPath);
+    _http = await serveGuests(
+      mesh,
+      html: html,
+      nacl: nacl,
+      apkPath: () => apkPath,
+    );
   }
 
   /// Ouvre le réseau Wi-Fi invité (Android 10+).
   Future<bool> openHotspot() async {
     error = null;
     try {
-      final r = await _channel.invokeMapMethod<String, dynamic>('startGuestHotspot');
+      final r = await _channel.invokeMapMethod<String, dynamic>(
+        'startGuestHotspot',
+      );
       if (r == null) return false;
       hotspot = GuestHotspot(
         r['ssid'] as String,
@@ -78,10 +86,12 @@ class GuestServer {
   }
 }
 
-/// Ouvre le menu de partage Android (Quick Share, Bluetooth, Fichiers...) avec l'APK.
-Future<bool> shareApp() async {
+/// Envoie l'APK. [via] = 'quickshare' ou 'bluetooth' ouvre directement cette appli
+/// si elle existe, sinon (ou avec null) le menu de partage Android complet.
+Future<bool> shareApp({String? via}) async {
   try {
-    return await _channel.invokeMethod<bool>('shareApk') ?? false;
+    return await _channel.invokeMethod<String>('shareApk', {'via': via}) !=
+        null;
   } catch (_) {
     return false;
   }

@@ -53,6 +53,15 @@ void main() {
     expect(bytes, f.readAsBytesSync());
   });
 
+  test("la page d'installation a un gros bouton et les étapes", () async {
+    final r = await get('/installer');
+    expect(r.statusCode, 200);
+    final html = await utf8.decodeStream(r);
+    expect(html, contains('href="/fiwichat.apk"'));
+    expect(html, contains('Autoriser cette source'));
+    expect(html, contains('Installer quand même'));
+  });
+
   test("sans APK (ex. iPhone), un message clair au lieu d'une erreur", () async {
     final r = await get('/fiwichat.apk');
     expect(r.statusCode, 404);

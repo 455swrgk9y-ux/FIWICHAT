@@ -1,6 +1,8 @@
 package com.fiwichat.fiwichat
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
@@ -35,7 +37,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "startGuestHotspot" -> startGuestHotspot(result)
                     "getApkPath" -> result.success(applicationInfo.sourceDir)
-                    "shareApk" -> shareApk(result)
+                    "shareApk" -> shareApk(call.argument<String>("via"), result)
                     "startKeepAlive" -> {
                         try {
                             startForegroundService(Intent(this, KeepAliveService::class.java))
@@ -124,7 +126,14 @@ class MainActivity : FlutterActivity() {
     }
 
     /** Envoie l'appli elle-même (son APK) via Quick Share, Bluetooth, etc. */
-    private fun shareApk(result: MethodChannel.Result) {
+    // Applis de partage connues : on les ouvre directement, sans passer par la liste.
+    private val quickSharePackages = listOf(
+        "com.google.android.gms",            // Quick Share (Google)
+        "com.samsung.android.app.sharelive", // Quick Share (Samsung)
+    )
+    private val bluetoothPackages = listOf("com.android.bluetooth", "com.google.android.bluetooth")
+
+    private fun shareApk(via: String?, result: MethodChannel.Result) {
         Thread {
             try {
                 val dir = File(cacheDir, "share").apply { mkdirs() }
@@ -134,16 +143,51 @@ class MainActivity : FlutterActivity() {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "application/vnd.android.package-archive"
                     putExtra(Intent.EXTRA_STREAM, uri)
+                    clipData = ClipData.newRawUri("fiwichat.apk", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
+                val wanted = when (via) {
+                    "quickshare" -> quickSharePackages
+                    "bluetooth" -> bluetoothPackages
+                    else -> emptyList()
+                }
+                val target = findTarget(send, wanted)
                 runOnUiThread {
-                    startActivity(Intent.createChooser(send, "Partager FIWICHAT"))
-                    result.success(true)
+                    try {
+                        if (target != null) {
+                            startActivity(Intent(send).setComponent(target))
+                            result.success("direct")
+                        } else {
+                            startActivity(Intent.createChooser(send, "Envoyer FIWICHAT avec…"))
+                            result.success("liste")
+                        }
+                    } catch (e: Exception) {
+                        // L'appli visée a refusé : on montre la liste complète.
+                        startActivity(Intent.createChooser(send, "Envoyer FIWICHAT avec…"))
+                        result.success("liste")
+                    }
                 }
             } catch (e: Exception) {
                 runOnUiThread { result.error("SHARE", e.message, null) }
             }
         }.start()
+    }
+
+    private fun findTarget(send: Intent, packages: List<String>): ComponentName? {
+        if (packages.isEmpty()) return null
+        @Suppress("DEPRECATION")
+        val all = packageManager.queryIntentActivities(send, 0)
+        for (pkg in packages) {
+            val matches = all.filter { it.activityInfo.packageName == pkg && it.activityInfo.exported }
+            if (matches.isEmpty()) continue
+            // Dans Google Play Services, plusieurs écrans reçoivent les fichiers : on prend celui de Quick Share.
+            val best = matches.firstOrNull {
+                val n = it.activityInfo.name.lowercase()
+                n.contains("nearby") || n.contains("sharing") || n.contains("share")
+            } ?: if (pkg == "com.google.android.gms") null else matches.first()
+            if (best != null) return ComponentName(best.activityInfo.packageName, best.activityInfo.name)
+        }
+        return null
     }
 
     private fun stopGuestHotspot() {
