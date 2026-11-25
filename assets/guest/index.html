@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FIWICHAT</title>
+<style>
+  :root { --brand:#00897B; --brand-dark:#00695C; --bg:#f4faf9; --card:#fff; --text:#17201f; --muted:#5d6b69; --mine:#a5f0e2; --other:#e1e6e5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1716; --card:#18211f; --text:#e6efed; --muted:#9db0ad; --mine:#0f5a50; --other:#26302e; } }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:16px/1.4 system-ui,-apple-system,Roboto,sans-serif; }
+  .screen { display:none; flex-direction:column; height:100%; }
+  .screen.on { display:flex; }
+  header { display:flex; align-items:center; gap:8px; padding:14px 16px; font-size:20px; font-weight:600; }
+  header button { background:none; border:0; font-size:24px; color:var(--text); padding:0 8px 0 0; cursor:pointer; }
+  .hint { color:var(--muted); font-size:13px; padding:0 16px 8px; }
+  #start { justify-content:center; align-items:center; padding:24px; text-align:center; }
+  #start h1 { margin:8px 0 4px; font-size:32px; }
+  input, textarea { font:inherit; color:inherit; }
+  #name { width:100%; max-width:340px; padding:14px; border:2px solid var(--brand); border-radius:8px; background:transparent; margin:24px 0 12px; }
+  .btn { width:100%; max-width:340px; padding:14px; border:0; border-radius:28px; background:var(--brand-dark); color:#fff; font-size:16px; cursor:pointer; }
+  ul { list-style:none; margin:0; padding:0; overflow:auto; flex:1; }
+  li { display:flex; align-items:center; gap:14px; padding:12px 16px; cursor:pointer; }
+  .av { width:44px; height:44px; border-radius:50%; background:var(--brand); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; flex:none; }
+  .av.off { background:#9aa5a3; }
+  li .t { font-weight:600; } li .s { color:var(--muted); font-size:14px; }
+  li .grow { flex:1; min-width:0; }
+  .badge { background:var(--brand); color:#fff; border-radius:12px; padding:1px 8px; font-size:13px; }
+  hr { border:0; border-top:1px solid #c5cfcd; margin:4px 0; }
+  #msgs { flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .m { max-width:78%; padding:8px 12px; border-radius:16px; background:var(--other); align-self:flex-start; word-wrap:break-word; white-space:pre-wrap; }
+  .m.me { background:var(--mine); align-self:flex-end; }
+  .m .who { color:var(--brand); font-weight:700; font-size:13px; }
+  .m .time { color:var(--muted); font-size:11px; margin-top:2px; }
+  .empty { margin:auto; color:var(--muted); }
+  form { display:flex; gap:8px; padding:8px 8px calc(8px + env(safe-area-inset-bottom)); }
+  #text { flex:1; outline:none; padding:12px 16px; border-radius:24px; border:0; background:var(--other); }
+  #send { width:48px; height:48px; border-radius:50%; border:0; background:var(--brand-dark); color:#fff; font-size:20px; cursor:pointer; }
+  .status { padding:6px 16px; font-size:13px; color:#fff; background:#c0392b; display:none; }
+  .status.on { display:block; }
+  .get { margin:8px 16px 4px; padding:12px 14px; border-radius:14px; background:var(--other); display:flex; gap:12px; align-items:center; }
+  .get .grow { flex:1; min-width:0; font-size:14px; }
+  .get a { flex:none; background:var(--brand-dark); color:#fff; text-decoration:none; padding:10px 14px; border-radius:20px; font-weight:600; font-size:14px; }
+</style>
+</head>
+<body>
+<section id="start" class="screen">
+  <svg width="72" height="72" viewBox="0 0 24 24" fill="#00897B" aria-hidden="true"><path d="M12 11c-1.1 0-2 .9-2 2 0 .74.4 1.38 1 1.72V22h2v-7.28c.6-.35 1-.98 1-1.72 0-1.1-.9-2-2-2zm-6 2c0-3.31 2.69-6 6-6s6 2.69 6 6c0 1.66-.67 3.16-1.77 4.24l1.42 1.42C19.1 17.21 20 15.21 20 13c0-4.42-3.58-8-8-8s-8 3.58-8 8c0 2.21.9 4.21 2.35 5.66l1.42-1.42C6.67 16.16 6 14.66 6 13zm6-10C6.48 3 2 7.48 2 13c0 2.76 1.12 5.26 2.93 7.07l1.42-1.42C4.9 17.21 4 15.21 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.21-.9 4.21-2.35 5.65l1.42 1.42C20.88 18.26 22 15.76 22 13c0-5.52-4.48-10-10-10z"/></svg>
+  <h1>FIWICHAT</h1>
+  <div>Tu es invité. Discute sans internet, sans rien installer.</div>
+  <input id="name" placeholder="Ton pseudo" maxlength="30" autocomplete="nickname">
+  <button class="btn" id="go">Commencer</button>
+</section>
+
+<section id="home" class="screen">
+  <header>FIWICHAT <span id="me" style="font-size:13px;font-weight:400;color:var(--muted)">· invité</span></header>
+  <div class="status" id="st1">Connexion perdue… reconnexion</div>
+  <div class="get" id="get"><div class="grow"><b>Installer FIWICHAT</b><br><span id="gettxt">Sans internet : l'appli vient directement de ce téléphone. Ensuite tu pourras la redonner à d'autres.</span></div><a id="getbtn" href="/fiwichat.apk" download="fiwichat.apk">Télécharger</a></div>
+  <ul id="list"></ul>
+</section>
+
+<section id="chat" class="screen">
+  <header><button id="back" aria-label="Retour">←</button><span id="ctitle"></span></header>
+  <div class="status" id="st2">Connexion perdue… reconnexion</div>
+  <div class="hint" id="chint"></div>
+  <div id="msgs"></div>
+  <form id="f"><input id="text" placeholder="Écris un message" autocomplete="off" maxlength="2000"><button id="send" aria-label="Envoyer">➤</button></form>
+</section>
+
+<script src="/nacl.js"></script>
+<script>
+(function () {
+  'use strict';
+  var GROUP = 'tous';
+  var GROUP_ICON = '<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>';
+  var enc = new TextEncoder(), dec = new TextDecoder();
+  function b64(u8) { var s = ''; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function concat(a, b) { var r = new Uint8Array(a.length + b.length); r.set(a); r.set(b, a.length); return r; }
+  function rid() { return Array.from(nacl.randomBytes(12), function (x) { return ('0' + x.toString(16)).slice(-2); }).join(''); }
+  function tag(id) { try { return Array.from(unb64(id).subarray(0, 3), function (x) { return ('0' + x.toString(16)).slice(-2); }).join('').toUpperCase(); } catch (e) { return '??????'; } }
+  function norm(n) { return String(n || '').trim().toLowerCase(); }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+  // ---- Identité (clé gardée dans ce navigateur) ----
+  // ---- Identité : une clé pour signer (= identité), une clé pour chiffrer ----
+  var sk, bk, saved = store('fiwi_keys2');
+  try { if (saved) { var ks = JSON.parse(saved); sk = nacl.sign.keyPair.fromSeed(unb64(ks.s)); bk = nacl.box.keyPair.fromSecretKey(unb64(ks.b)); } } catch (e) { sk = null; }
+  if (!sk) { var seed = nacl.randomBytes(32); sk = nacl.sign.keyPair.fromSeed(seed); bk = nacl.box.keyPair(); store('fiwi_keys2', JSON.stringify({ s: b64(seed), b: b64(bk.secretKey) })); }
+  var myId = b64(sk.publicKey), myEnc = b64(bk.publicKey), myName = store('fiwi_name') || '';
+  var MAX_AGE = 2 * 24 * 3600 * 1000, MAX_TEXT = 2000;
+
+  // ---- Signatures et chiffrement (même format que l'appli) ----
+  function sign(fields) { return b64(nacl.sign.detached(enc.encode(JSON.stringify(fields)), sk.secretKey)); }
+  function verify(id, fields, sig) { try { return typeof sig === 'string' && nacl.sign.detached.verify(enc.encode(JSON.stringify(fields)), unb64(sig), unb64(id)); } catch (e) { return false; } }
+  function annFields(p) { return ['ann', p.id, p.src, p.x, p.name, p.guest === true, p.ts]; }
+  function grpFields(p) { return ['grp', p.id, p.src, p.name, p.text, p.ts]; }
+  function dmFields(from, to, mid, text, ack, ts) { return ['dm', from, to, mid, text, ack, ts]; }
+  function seal(toId, body) {
+    var who = people[toId]; if (!who || !who.x) return null;
+    var ts = Date.now(), mid = body.mid || null, text = typeof body.text === 'string' ? body.text : null, ack = body.ack || null;
+    var inner = { src: myId, name: myName, to: toId, mid: mid, text: text, ack: ack, ts: ts, sig: sign(dmFields(myId, toId, mid, text, ack, ts)) };
+    var eph = nacl.box.keyPair(), n = nacl.randomBytes(24);
+    return { e: b64(eph.publicKey), c: b64(concat(n, nacl.box(enc.encode(JSON.stringify(inner)), n, unb64(who.x), eph.secretKey))), ts: ts };
+  }
+  function unseal(e, c) {
+    try {
+      var d = unb64(c); if (d.length < 40) return null;
+      var o = nacl.box.open(d.subarray(24), d.subarray(0, 24), unb64(e), bk.secretKey); if (!o) return null;
+      var b = JSON.parse(dec.decode(o));
+      if (b.to !== myId) return null;
+      if (!verify(b.src, dmFields(b.src, myId, b.mid, b.text, b.ack, b.ts), b.sig)) return null;
+      return { from: b.src, name: b.name, text: b.text, ts: b.ts, mid: b.mid, ack: b.ack };
+    } catch (err) { return null; }
+  }
+
+  // ---- État ----
+  var people = {}, convos = {}, unread = {}, seen = new Set(), openConvo = null, ws = null, title = document.title;
+  convos[GROUP] = [];
+  function markSeen(id) { if (seen.has(id)) return false; seen.add(id); if (seen.size > 5000) seen.delete(seen.values().next().value); return true; }
+  function addMsg(convo, m) {
+    (convos[convo] = convos[convo] || []).push(m);
+    if (!m.mine && openConvo !== convo) { unread[convo] = (unread[convo] || 0) + 1; if (navigator.vibrate) navigator.vibrate(80); }
+    render();
+  }
+
+  // ---- Réseau ----
+  function sendFrame(p) { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(p)); return true; } return false; }
+  function announce() { var p = { t: 'ann', id: rid(), h: 0, src: myId, x: myEnc, name: myName, guest: true, ts: Date.now() }; p.sig = sign(annFields(p)); markSeen(p.id); sendFrame(p); }
+  function connect() {
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws.onopen = function () { setStatus(false); announce(); };
+    ws.onclose = function () { setStatus(true); setTimeout(connect, 2000); };
+    ws.onmessage = function (ev) { onFrame(ev.data); };
+  }
+  function setStatus(lost) { ['st1', 'st2'].forEach(function (id) { document.getElementById(id).classList.toggle('on', lost); }); }
+  function onFrame(raw) {
+    if (typeof raw !== 'string' || raw.length > 16384) return;
+    var p; try { p = JSON.parse(raw); } catch (e) { return; }
+    if (typeof p.id !== 'string' || !markSeen(p.id)) return;
+    if (p.t === 'ann' && typeof p.src === 'string' && p.src !== myId) {
+      if (typeof p.name !== 'string' || typeof p.x !== 'string' || !verify(p.src, annFields(p), p.sig)) return;
+      var pe = people[p.src] = people[p.src] || { id: p.src, annTs: 0 };
+      if (p.ts < (pe.annTs || 0)) return; // vieille annonce rejouée
+      pe.annTs = p.ts; pe.name = p.name; pe.x = p.x; pe.guest = !!p.guest; pe.seen = Date.now(); render();
+    } else if (p.t === 'grp' && typeof p.src === 'string' && p.src !== myId) {
+      if (typeof p.text !== 'string' || p.text.length > MAX_TEXT || Date.now() - p.ts > MAX_AGE) return;
+      if (!verify(p.src, grpFields(p), p.sig)) return; // faux expéditeur ou texte modifié
+      people[p.src] = people[p.src] || { id: p.src, name: p.name }; people[p.src].seen = Date.now();
+      addMsg(GROUP, { from: p.src, name: p.name, text: p.text, ts: p.ts });
+    } else if (p.t === 'dm') {
+      var m = unseal(p.e, p.c);
+      if (!m) return; // pas pour moi : le téléphone hôte s'occupe du relais
+      if (Date.now() - m.ts > MAX_AGE) return;
+      people[m.from] = people[m.from] || { id: m.from, name: m.name }; people[m.from].seen = Date.now();
+      if (m.ack) { (convos[m.from] || []).forEach(function (x) { if (x.mine && x.mid === m.ack) x.delivered = true; }); render(); return; }
+      if (typeof m.text !== 'string' || m.text.length > MAX_TEXT) return;
+      if (m.mid) sendDm(m.from, { ack: m.mid });
+      if (m.mid && (convos[m.from] || []).some(function (x) { return !x.mine && x.mid === m.mid; })) return; // rejeu
+      addMsg(m.from, m);
+    }
+  }
+  function sendDm(to, body) { var s = seal(to, body); if (!s) return false; var p = { t: 'dm', id: rid(), h: 0, e: s.e, c: s.c }; markSeen(p.id); return sendFrame(p); }
+  function sendText(convo, text) {
+    var ts = Date.now(), mid = rid(), ok;
+    if (convo === GROUP) { var p = { t: 'grp', id: mid, h: 0, src: myId, name: myName, text: text, ts: ts }; p.sig = sign(grpFields(p)); markSeen(mid); ok = sendFrame(p); }
+    else ok = sendDm(convo, { text: text, ts: ts, mid: mid });
+    addMsg(convo, { from: myId, name: myName, text: text, ts: ts, mine: true, mid: mid, failed: !ok });
+  }
+
+  // ---- Écrans ----
+  var $ = function (id) { return document.getElementById(id); };
+  function show(id) { ['start', 'home', 'chat'].forEach(function (s) { $(s).classList.toggle('on', s === id); }); }
+  function online(p) { return Date.now() - (p.seen || 0) < 50000; }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function hhmm(ts) { var d = new Date(ts); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+  function item(id, name, sub, on, icon, full) {
+    var u = unread[id] || 0;
+    return '<li data-id="' + esc(id) + '" data-name="' + esc(full || name) + '"><div class="av' + (on ? '' : ' off') + '">' + icon + '</div>' +
+      '<div class="grow"><div class="t">' + esc(name) + '</div><div class="s">' + esc(sub) + '</div></div>' +
+      (u ? '<span class="badge">' + u + '</span>' : '<span style="color:var(--muted)">›</span>') + '</li>';
+  }
+  function render() {
+    var total = 0; for (var k in unread) total += unread[k];
+    document.title = total ? '(' + total + ') ' + title : title;
+    var list = Object.values(people).filter(function (p) { return online(p) || (convos[p.id] || []).length; })
+      .sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    var n = list.filter(online).length;
+    var h = item(GROUP, 'Salon général', n ? n + ' personne' + (n > 1 ? 's' : '') + ' connectée' + (n > 1 ? 's' : '') : 'Personne pour l’instant', true, GROUP_ICON) + '<hr>';
+    if (!list.length) h += '<li style="cursor:default;color:var(--muted)">Recherche des autres personnes…</li>';
+    var dupMe = false;
+    list.forEach(function (p) {
+      var dup = norm(p.name) === norm(myName) || list.some(function (o) { return o !== p && norm(o.name) === norm(p.name); });
+      if (norm(p.name) === norm(myName)) dupMe = true;
+      h += item(p.id, p.name, (dup ? '⚠ Même pseudo qu\u2019un autre · ' : '') + '#' + tag(p.id) + ' · ' + (online(p) ? 'en ligne' : 'hors ligne') + (p.guest ? ' · invité' : ''), online(p), esc(String(p.name || '?').charAt(0).toUpperCase()), p.name + ' #' + tag(p.id));
+    });
+    if (dupMe) h = '<li style="cursor:default;background:var(--other)"><div class="grow"><div class="t">Quelqu\u2019un d\u2019autre s\u2019appelle aussi « ' + esc(myName) + ' »</div><div class="s">Ton code #' + tag(myId) + ' vous distingue. Recharge la page pour changer de pseudo.</div></div></li>' + h;
+    $('list').innerHTML = h;
+    if (openConvo) renderChat();
+  }
+  function renderChat() {
+    var msgs = convos[openConvo] || [], box = $('msgs'), atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    if (!msgs.length) { box.innerHTML = '<div class="empty">Aucun message. Dis bonjour !</div>'; return; }
+    box.innerHTML = msgs.map(function (m) {
+      return '<div class="m' + (m.mine ? ' me' : '') + '">' + (openConvo === GROUP && !m.mine ? '<div class="who">' + esc(m.name) + ' #' + tag(m.from) + '</div>' : '') +
+        esc(m.text) + '<div class="time">' + hhmm(m.ts) + (m.failed ? ' · non envoyé' : (m.delivered ? ' · ✓ reçu' : '')) + '</div></div>';
+    }).join('');
+    if (atBottom || msgs[msgs.length - 1].mine) box.scrollTop = box.scrollHeight;
+  }
+  $('list').addEventListener('click', function (e) {
+    var li = e.target.closest('li[data-id]'); if (!li) return;
+    openConvo = li.dataset.id; delete unread[openConvo];
+    $('ctitle').textContent = li.dataset.name;
+    $('chint').textContent = openConvo === GROUP ? 'Tout le monde voit ces messages.' : '\u{1F512} Privé : chiffré, seul(e) ' + li.dataset.name + ' peut le lire.';
+    show('chat'); render(); $('msgs').scrollTop = 1e9;
+  });
+  $('back').onclick = function () { openConvo = null; show('home'); render(); };
+  $('f').onsubmit = function (e) { e.preventDefault(); var t = $('text').value.trim(); if (!t) return; $('text').value = ''; sendText(openConvo, t); };
+  function begin() { var n = $('name').value.trim(); if (!n) return; myName = n; store('fiwi_name', n); $('me').textContent = '· invité · ' + n + ' #' + tag(myId); show('home'); render(); connect(); setInterval(function () { announce(); render(); }, 15000); }
+  $('go').onclick = begin;
+  $('name').addEventListener('keydown', function (e) { if (e.key === 'Enter') begin(); });
+  $('name').value = myName;
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    $('getbtn').hidden = true;
+    $('gettxt').textContent = 'L\u2019appli n\u2019existe que pour Android. Sur iPhone, continue à discuter ici.';
+  } else {
+    $('gettxt').textContent = 'Sans internet : l\u2019appli vient directement de ce téléphone. Ouvre le fichier puis autorise « Installer des applis inconnues ».';
+  }
+  show('start');
+})();
+</script>
+</body>
+</html>
