@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     hide Person;
+import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'crypto.dart';
 import 'guest_server.dart';
+import 'media.dart';
 import 'mesh.dart';
 import 'radios.dart';
 import 'updates.dart';
@@ -76,6 +78,13 @@ class AppServices {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('state');
     if (saved != null) mesh.importState(saved);
+    // Photos et vidéos : rangées dans l'espace privé de l'appli.
+    try {
+      final dir = await _wifiChannel.invokeMethod<String>('mediaDir');
+      mesh.attachMedia(Directory(dir ?? '${Directory.systemTemp.path}/media'));
+    } catch (_) {
+      mesh.attachMedia(Directory('${Directory.systemTemp.path}/media'));
+    }
     mesh.changes.listen((_) {
       _saveTimer?.cancel();
       _saveTimer = Timer(
@@ -907,6 +916,94 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.mesh.send(widget.convo, text);
   }
 
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Choisir ou prendre une photo / vidéo, puis l'envoyer (le texte tapé sert de légende).
+  Future<void> _pickMedia() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Photo de la galerie'),
+              onTap: () => Navigator.pop(context, 'photo'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera),
+              title: const Text('Prendre une photo'),
+              onTap: () => Navigator.pop(context, 'camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.video_library),
+              title: const Text('Vidéo de la galerie'),
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('Filmer une vidéo'),
+              subtitle: const Text('30 secondes maximum'),
+              onTap: () => Navigator.pop(context, 'film'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null) return;
+    final picker = ImagePicker();
+    XFile? file;
+    try {
+      if (choice == 'photo' || choice == 'camera') {
+        // Photo réduite et compressée : ~200 Ko, rapide même en Bluetooth.
+        file = await picker.pickImage(
+          source: choice == 'camera' ? ImageSource.camera : ImageSource.gallery,
+          maxWidth: 1600,
+          maxHeight: 1600,
+          imageQuality: 70,
+        );
+      } else {
+        file = await picker.pickVideo(
+          source: choice == 'film' ? ImageSource.camera : ImageSource.gallery,
+          maxDuration: const Duration(seconds: 30),
+        );
+      }
+    } catch (_) {
+      _toast('Impossible d\'ouvrir la galerie ou l\'appareil photo.');
+      return;
+    }
+    if (file == null) return;
+    final isVideo = choice == 'video' || choice == 'film';
+    final size = await file.length();
+    if (size > kMaxMediaBytes) {
+      _toast(
+        isVideo
+            ? 'Vidéo trop lourde (8 Mo maximum). Filme une vidéo plus courte.'
+            : 'Photo trop lourde (8 Mo maximum).',
+      );
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    final caption = _text.text.trim();
+    _text.clear();
+    final ok = await widget.mesh.sendMedia(
+      widget.convo,
+      bytes,
+      kind: isVideo ? 'video' : 'photo',
+      mime: _mimeOf(file.name, isVideo),
+      caption: caption.length > kMaxText
+          ? caption.substring(0, kMaxText)
+          : caption,
+    );
+    if (!ok)
+      _toast('Envoi impossible : la personne n\'est pas encore connue ici.');
+  }
+
   @override
   Widget build(BuildContext context) {
     final isGroup = widget.convo == kGroupId;
@@ -1006,10 +1103,19 @@ class _ChatScreenState extends State<ChatScreen> {
                                     fontSize: 13,
                                   ),
                                 ),
-                              Text(
-                                m.text,
-                                style: const TextStyle(fontSize: 16),
-                              ),
+                              if (m.media != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: 4,
+                                    bottom: 4,
+                                  ),
+                                  child: MediaBubble(message: m),
+                                ),
+                              if (m.text.isNotEmpty)
+                                Text(
+                                  m.text,
+                                  style: const TextStyle(fontSize: 16),
+                                ),
                               const SizedBox(height: 2),
                               Text(
                                 m.failed
@@ -1035,6 +1141,15 @@ class _ChatScreenState extends State<ChatScreen> {
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Row(
                 children: [
+                  IconButton(
+                    key: const Key('attach'),
+                    onPressed: _pickMedia,
+                    tooltip: 'Envoyer une photo ou une vidéo',
+                    icon: const Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 28,
+                    ),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _text,
@@ -1133,6 +1248,181 @@ class VerifyDialog extends StatelessWidget {
       ],
     );
   }
+}
+
+String _mimeOf(String name, bool video) {
+  final ext = name.split('.').last.toLowerCase();
+  return switch (ext) {
+    'png' => 'image/png',
+    'gif' => 'image/gif',
+    'webp' => 'image/webp',
+    'webm' => 'video/webm',
+    'mov' => 'video/quicktime',
+    '3gp' => 'video/3gpp',
+    'mp4' || 'm4v' => 'video/mp4',
+    _ => video ? 'video/mp4' : 'image/jpeg',
+  };
+}
+
+String _sizeLabel(int bytes) => bytes >= 1024 * 1024
+    ? '${(bytes / 1024 / 1024).toStringAsFixed(1).replaceAll('.', ',')} Mo'
+    : '${(bytes / 1024).ceil()} Ko';
+
+Future<void> _openFile(String path, String mime) async {
+  try {
+    await _wifiChannel.invokeMethod('openFile', {'path': path, 'mime': mime});
+  } catch (_) {}
+}
+
+Future<void> _shareFile(String path, String mime) async {
+  try {
+    await _wifiChannel.invokeMethod('shareFile', {'path': path, 'mime': mime});
+  } catch (_) {}
+}
+
+/// Photo ou vidéo dans une bulle de conversation.
+class MediaBubble extends StatelessWidget {
+  const MediaBubble({super.key, required this.message});
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = message.media!;
+    final path = message.path;
+    final progress = message.progress;
+    final scheme = Theme.of(context).colorScheme;
+    final ready = path != null && File(path).existsSync();
+    Widget body;
+    if (ready && !m.isVideo) {
+      body = GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PhotoScreen(path: path, mime: m.mime),
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320, minWidth: 120),
+            child: Image.file(
+              File(path),
+              fit: BoxFit.cover,
+              cacheWidth: 900,
+              errorBuilder: (_, _, _) => const _MediaTile(
+                icon: Icons.broken_image_outlined,
+                label: 'Photo illisible',
+              ),
+            ),
+          ),
+        ),
+      );
+    } else if (ready) {
+      body = InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _openFile(path, m.mime),
+        child: _MediaTile(
+          icon: Icons.play_circle_fill,
+          label: 'Vidéo · ${_sizeLabel(m.size)}',
+          dark: true,
+        ),
+      );
+    } else {
+      final pct = progress == null ? null : (progress * 100).round();
+      final what = m.isVideo ? 'Vidéo' : 'Photo';
+      body = _MediaTile(
+        icon: m.isVideo ? Icons.videocam_outlined : Icons.photo_outlined,
+        label: pct == null
+            ? '$what en attente… (${_sizeLabel(m.size)})'
+            : 'Réception de la ${what.toLowerCase()} · $pct %',
+        progress: progress,
+      );
+    }
+    // Chez l'expéditeur : la photo s'affiche tout de suite, avec la progression de l'envoi.
+    if (ready && message.mine && progress != null) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          body,
+          const SizedBox(height: 6),
+          LinearProgressIndicator(value: progress),
+          Text(
+            'Envoi… ${(progress * 100).round()} %',
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+    return body;
+  }
+}
+
+class _MediaTile extends StatelessWidget {
+  const _MediaTile({
+    required this.icon,
+    required this.label,
+    this.progress,
+    this.dark = false,
+  });
+  final IconData icon;
+  final String label;
+  final double? progress;
+  final bool dark;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = dark ? Colors.white : scheme.onSurfaceVariant;
+    return Container(
+      width: 220,
+      height: 150,
+      decoration: BoxDecoration(
+        color: dark ? Colors.black87 : scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 48, color: fg),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: fg),
+          ),
+          if (progress != null) ...[
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: progress),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Photo en plein écran (on peut zoomer), avec « Partager ».
+class PhotoScreen extends StatelessWidget {
+  const PhotoScreen({super.key, required this.path, required this.mime});
+  final String path, mime;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      backgroundColor: Colors.black,
+      foregroundColor: Colors.white,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.share),
+          tooltip: 'Partager ou enregistrer',
+          onPressed: () => _shareFile(path, mime),
+        ),
+      ],
+    ),
+    body: Center(
+      child: InteractiveViewer(maxScale: 5, child: Image.file(File(path))),
+    ),
+  );
 }
 
 // ======================= Mode invité =======================

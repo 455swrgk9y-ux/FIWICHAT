@@ -47,6 +47,13 @@ class MainActivity : FlutterActivity() {
                     "radioStatus" -> result.success(radioStatus())
                     "appVersion" -> result.success(appVersion())
                     "shareDir" -> result.success(File(cacheDir, "share").apply { mkdirs() }.absolutePath)
+                    "mediaDir" -> result.success(File(filesDir, "media").apply { mkdirs() }.absolutePath)
+                    "openFile" -> result.success(
+                        openFile(call.argument<String>("path") ?: "", call.argument<String>("mime") ?: "*/*", share = false)
+                    )
+                    "shareFile" -> result.success(
+                        openFile(call.argument<String>("path") ?: "", call.argument<String>("mime") ?: "*/*", share = true)
+                    )
                     "installApk" -> result.success(installApk(call.argument<String>("path") ?: ""))
                     "openUrl" -> result.success(openUrl(call.argument<String>("url") ?: ""))
                     "openRadioSettings" -> result.success(openRadioSettings(call.argument<String>("which")))
@@ -107,6 +114,31 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             "error"
         }
+    }
+
+    /** Ouvre une photo/vidéo reçue avec le lecteur du téléphone, ou la partage. */
+    private fun openFile(path: String, mime: String, share: Boolean): Boolean = try {
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", File(path))
+        val i = if (share) {
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    clipData = ClipData.newRawUri("", uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                "Partager",
+            )
+        } else {
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        startActivity(i)
+        true
+    } catch (e: Exception) {
+        false
     }
 
     private fun openUrl(url: String): Boolean = try {

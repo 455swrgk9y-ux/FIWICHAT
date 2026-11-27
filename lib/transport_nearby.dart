@@ -70,14 +70,17 @@ class NearbyTransport {
           if (mesh.links.containsKey('nb:$id') || _pending.contains(id)) return;
           _pending.add(id);
           Nearby()
-              .requestConnection(nick, id,
-                  onConnectionInitiated: _onInitiated,
-                  onConnectionResult: _onResult,
-                  onDisconnected: _onDisconnected)
+              .requestConnection(
+                nick,
+                id,
+                onConnectionInitiated: _onInitiated,
+                onConnectionResult: _onResult,
+                onDisconnected: _onDisconnected,
+              )
               .catchError((_) {
-            _pending.remove(id);
-            return false;
-          });
+                _pending.remove(id);
+                return false;
+              });
         },
         onEndpointLost: (id) {
           if (id != null) _pending.remove(id);
@@ -90,11 +93,16 @@ class NearbyTransport {
   }
 
   void _onInitiated(String id, ConnectionInfo info) {
-    Nearby().acceptConnection(id, onPayLoadRecieved: (endpointId, payload) {
-      final bytes = payload.bytes;
-      if (payload.type != PayloadType.BYTES || bytes == null) return;
-      mesh.receive(utf8.decode(bytes), 'nb:$endpointId');
-    }).catchError((_) => false);
+    Nearby()
+        .acceptConnection(
+          id,
+          onPayLoadRecieved: (endpointId, payload) {
+            final bytes = payload.bytes;
+            if (payload.type != PayloadType.BYTES || bytes == null) return;
+            mesh.receive(utf8.decode(bytes), 'nb:$endpointId');
+          },
+        )
+        .catchError((_) => false);
   }
 
   void _onResult(String id, Status status) {

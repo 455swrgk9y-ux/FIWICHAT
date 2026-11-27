@@ -8,18 +8,25 @@
 //            destinataire y arrive. Tous les téléphones (destinataire compris) le
 //            font suivre de la même façon, donc personne ne peut savoir qui l'a lu,
 //            et les relais ne voient rien et ne reçoivent aucune notification.
+//  * "fc" / "fneed" : morceaux chiffrés d'une photo ou vidéo, et redemande des
+//            morceaux perdus (voir media.dart).
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'crypto.dart';
+import 'media.dart';
 
 const String kGroupId = 'tous';
 const int kMaxHops = 10;
 const int kMaxFrame = 16 * 1024; // taille max d'un paquet
 const int kMaxText = 2000; // longueur max d'un message
-const Duration kMaxAge = Duration(days: 2); // au-delà, un message est considéré comme rejoué
+const Duration kMaxAge = Duration(
+  days: 2,
+); // au-delà, un message est considéré comme rejoué
 
 /// Une liaison vers un voisin (Wi-Fi local, Nearby, ou invité dans le navigateur).
 abstract class Link {
@@ -37,7 +44,8 @@ class Person {
   bool verified = false; // codes comparés en face à face
   bool guest = false;
   DateTime lastSeen = DateTime.now();
-  bool get online => DateTime.now().difference(lastSeen) < const Duration(seconds: 50);
+  bool get online =>
+      DateTime.now().difference(lastSeen) < const Duration(seconds: 50);
   String get tag => shortTag(id);
 }
 
@@ -51,6 +59,8 @@ class ChatMessage {
     this.mid,
     this.delivered = false,
     this.failed = false,
+    this.media,
+    this.path,
   });
   final String fromId, fromName, text;
   final DateTime time;
@@ -59,25 +69,38 @@ class ChatMessage {
   bool delivered;
   bool failed;
 
+  /// Photo ou vidéo jointe (null pour un simple message).
+  final MediaMeta? media;
+
+  /// Fichier sur ce téléphone, dès qu'il est complet.
+  String? path;
+
+  /// Avancement de l'envoi ou de la réception (0 à 1), null quand c'est fini.
+  double? progress;
+
   Map<String, dynamic> toJson() => {
-        'f': fromId,
-        'n': fromName,
-        'x': text,
-        't': time.millisecondsSinceEpoch,
-        if (mine) 'm': true,
-        if (mid != null) 'i': mid,
-        if (delivered) 'd': true,
-      };
+    'f': fromId,
+    'n': fromName,
+    'x': text,
+    't': time.millisecondsSinceEpoch,
+    if (mine) 'm': true,
+    if (mid != null) 'i': mid,
+    if (delivered) 'd': true,
+    if (media != null) 'md': media!.toJson(),
+    if (path != null) 'p': path,
+  };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        fromId: j['f'] as String,
-        fromName: j['n'] as String,
-        text: j['x'] as String,
-        time: DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt()),
-        mine: j['m'] == true,
-        mid: j['i'] as String?,
-        delivered: j['d'] == true,
-      );
+    fromId: j['f'] as String,
+    fromName: j['n'] as String,
+    text: j['x'] as String,
+    time: DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt()),
+    mine: j['m'] == true,
+    mid: j['i'] as String?,
+    delivered: j['d'] == true,
+    media: MediaMeta.fromJson(j['md']),
+    path: j['p'] as String?,
+  );
 }
 
 /// Notification à afficher (uniquement pour MES messages, jamais pour un relais).
@@ -111,6 +134,10 @@ class MeshNode {
   final _changes = StreamController<void>.broadcast();
   Stream<void> get changes => _changes.stream;
   final _notices = StreamController<IncomingNotice>.broadcast();
+
+  /// Photos et vidéos (null tant que [attachMedia] n'a pas été appelé).
+  MediaStore? media;
+  final Map<String, DateTime> _chunkBuckets = {};
   Stream<IncomingNotice> get notices => _notices.stream;
 
   String get myId => me.id;
@@ -123,9 +150,60 @@ class MeshNode {
     });
   }
 
-  void stop() => _timer?.cancel();
+  void stop() {
+    _timer?.cancel();
+    media?.stop();
+  }
 
-  String _newId() => List.generate(12, (_) => _rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  /// Active les photos et vidéos, rangées dans [dir].
+  void attachMedia(Directory dir) {
+    final store = MediaStore(
+      dir,
+      sendFrame: _flood,
+      newId: () {
+        final id = _newId();
+        _markSeen(id);
+        return id;
+      },
+    );
+    store.onProgress = (fid, got, n) {
+      for (final m in _messagesWith(fid)) {
+        if (m.path == null) m.progress = got / n;
+      }
+      _notify();
+    };
+    store.onComplete = (fid, path) {
+      for (final m in _messagesWith(fid)) {
+        m.path = path;
+        if (!m.mine) m.progress = null;
+      }
+      _notify();
+    };
+    media = store;
+    // Reprend les fichiers déjà connus (après un redémarrage).
+    for (final convo in conversations.values) {
+      for (final m in convo) {
+        final md = m.media;
+        if (md == null) continue;
+        final p = m.path;
+        if (p != null && File(p).existsSync()) {
+          store.hold(md, p);
+        } else {
+          m.path = null;
+          store.expect(md);
+        }
+      }
+    }
+    store.start();
+  }
+
+  Iterable<ChatMessage> _messagesWith(String fid) =>
+      conversations.values.expand((c) => c).where((m) => m.media?.fid == fid);
+
+  String _newId() => List.generate(
+    12,
+    (_) => _rng.nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
 
   bool _markSeen(String id) {
     if (_seen.contains(id)) return false;
@@ -161,14 +239,19 @@ class MeshNode {
   static String _norm(String n) => n.trim().toLowerCase();
 
   /// Vrai si une autre personne (en ligne ou avec qui j'ai parlé) a ce pseudo.
-  bool nameUsedByOther(String name, {String? exceptId}) => people.values.any((p) =>
-      p.id != exceptId && _norm(p.name) == _norm(name) && (p.online || (conversations[p.id]?.isNotEmpty ?? false)));
+  bool nameUsedByOther(String name, {String? exceptId}) => people.values.any(
+    (p) =>
+        p.id != exceptId &&
+        _norm(p.name) == _norm(name) &&
+        (p.online || (conversations[p.id]?.isNotEmpty ?? false)),
+  );
 
   /// Vrai si ce pseudo est porté par plusieurs personnes (moi compris).
   bool isDuplicate(Person p) =>
       _norm(p.name) == _norm(myName) || nameUsedByOther(p.name, exceptId: p.id);
 
-  int linkCount(String kind) => links.values.where((l) => l.kind == kind).length;
+  int linkCount(String kind) =>
+      links.values.where((l) => l.kind == kind).length;
 
   void _flood(String frame, {String? except}) {
     for (final l in links.values.toList()) {
@@ -183,7 +266,12 @@ class MeshNode {
 
   /// Appelé par les transports pour chaque paquet reçu.
   void receive(String frame, String fromLink) {
-    if (frame.length > kMaxFrame || !_allow(fromLink)) {
+    // Les morceaux de photos ont leur propre limite (plus large) pour ne pas
+    // bloquer les messages pendant un envoi.
+    final isChunk =
+        frame.length > 12 && frame.substring(0, 12).contains('"fc"');
+    if (frame.length > kMaxFrame ||
+        !(isChunk ? _allowChunk(fromLink) : _allow(fromLink))) {
       dropped++;
       return;
     }
@@ -202,6 +290,8 @@ class MeshNode {
       'ann' => _onAnnounce(p, frame),
       'grp' => _onGroup(p),
       'dm' => _onPrivate(p),
+      'fc' => _onChunk(p),
+      'fneed' => _onNeed(p),
       _ => false,
     };
     if (!ok) return;
@@ -214,7 +304,9 @@ class MeshNode {
   bool _allow(String link) {
     final now = DateTime.now();
     final (tokens, at) = _buckets[link] ?? (60.0, now);
-    final t = (tokens + now.difference(at).inMilliseconds / 50).clamp(0, 60).toDouble();
+    final t = (tokens + now.difference(at).inMilliseconds / 50)
+        .clamp(0, 60)
+        .toDouble();
     if (t < 1) {
       _buckets[link] = (t, now);
       return false;
@@ -223,17 +315,76 @@ class MeshNode {
     return true;
   }
 
-  static List<Object?> annFields(Map<String, dynamic> p) =>
-      ['ann', p['id'], p['src'], p['x'], p['name'], p['guest'] == true, p['ts']];
-  static List<Object?> grpFields(Map<String, dynamic> p) =>
-      ['grp', p['id'], p['src'], p['name'], p['text'], p['ts']];
+  /// Morceaux de photos : 150 d'avance, +60 par seconde et par voisin.
+  bool _allowChunk(String link) {
+    final now = DateTime.now();
+    final last = _chunkBuckets[link];
+    final tokens = _chunkTokens[link] ?? 150.0;
+    final t =
+        (tokens +
+                (last == null ? 0 : now.difference(last).inMilliseconds * 0.06))
+            .clamp(0, 150)
+            .toDouble();
+    _chunkBuckets[link] = now;
+    if (t < 1) {
+      _chunkTokens[link] = t;
+      return false;
+    }
+    _chunkTokens[link] = t - 1;
+    return true;
+  }
+
+  final Map<String, double> _chunkTokens = {};
+
+  bool _onChunk(Map<String, dynamic> p) {
+    final f = p['f'], i = p['i'], d = p['d'];
+    if (f is! String || i is! int || d is! String) return false;
+    final Uint8List data;
+    try {
+      data = base64Decode(d);
+    } catch (_) {
+      return false;
+    }
+    return media?.onChunk(f, i, data) ?? true;
+  }
+
+  bool _onNeed(Map<String, dynamic> p) {
+    final f = p['f'], miss = p['miss'];
+    if (f is! String || miss is! List || miss.length > 1000) return false;
+    final ints = miss.whereType<int>().toList();
+    media?.onNeed(f, ints);
+    return true;
+  }
+
+  static List<Object?> annFields(Map<String, dynamic> p) => [
+    'ann',
+    p['id'],
+    p['src'],
+    p['x'],
+    p['name'],
+    p['guest'] == true,
+    p['ts'],
+  ];
+  static List<Object?> grpFields(Map<String, dynamic> p) => [
+    'grp',
+    p['id'],
+    p['src'],
+    p['name'],
+    p['text'],
+    p['ts'],
+    if (p['m'] != null) p['m'],
+  ];
+
+  static String mediaLabel(MediaMeta m) => m.isVideo ? '🎬 Vidéo' : '📷 Photo';
 
   bool _tooOld(int ts) =>
-      DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) > kMaxAge;
+      DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) >
+      kMaxAge;
 
   bool _onAnnounce(Map<String, dynamic> p, String frame) {
     final src = p['src'], name = p['name'], x = p['x'], ts = p['ts'];
-    if (src is! String || name is! String || x is! String || ts is! int) return false;
+    if (src is! String || name is! String || x is! String || ts is! int)
+      return false;
     if (name.trim().isEmpty || name.length > 40) return false;
     if (!verifySig(src, annFields(p), p['sig'])) return false;
     if (src == myId) return true;
@@ -252,26 +403,46 @@ class MeshNode {
   }
 
   bool _onGroup(Map<String, dynamic> p) {
-    final src = p['src'], name = p['name'], text = p['text'], ts = p['ts'], id = p['id'];
-    if (src is! String || name is! String || text is! String || ts is! int) return false;
+    final src = p['src'],
+        name = p['name'],
+        text = p['text'],
+        ts = p['ts'],
+        id = p['id'];
+    if (src is! String || name is! String || text is! String || ts is! int)
+      return false;
     if (text.length > kMaxText || _tooOld(ts)) return false;
+    final md = p['m'] == null ? null : MediaMeta.fromJson(p['m']);
+    if (p['m'] != null && md == null) return false;
     if (!verifySig(src, grpFields(p), p['sig'])) return false;
     if (src == myId) return true;
     // Déjà reçu (même après un redémarrage) : c'est un rejeu, on l'ignore.
-    if ((conversations[kGroupId] ?? const []).any((m) => m.mid == id && m.fromId == src)) {
+    if ((conversations[kGroupId] ?? const []).any(
+      (m) => m.mid == id && m.fromId == src,
+    )) {
       return false;
     }
     people.putIfAbsent(src, () => Person(src, name)).lastSeen = DateTime.now();
     _addMessage(
-        kGroupId,
-        ChatMessage(
-            fromId: src,
-            fromName: name,
-            text: text,
-            mid: id as String,
-            time: DateTime.fromMillisecondsSinceEpoch(ts)));
+      kGroupId,
+      ChatMessage(
+        fromId: src,
+        fromName: name,
+        text: text,
+        mid: id as String,
+        media: md,
+        time: DateTime.fromMillisecondsSinceEpoch(ts),
+      ),
+    );
+    if (md != null) media?.expect(md);
     if (openConversation != kGroupId) {
-      _notices.add(IncomingNotice(kGroupId, 'Salon général', '$name #${shortTag(src)} : $text'));
+      final body = text.isEmpty && md != null ? mediaLabel(md) : text;
+      _notices.add(
+        IncomingNotice(
+          kGroupId,
+          'Salon général',
+          '$name #${shortTag(src)} : $body',
+        ),
+      );
     }
     return true;
   }
@@ -280,10 +451,14 @@ class MeshNode {
     final e = p['e'], c = p['c'];
     if (e is! String || c is! String) return false;
     final opened = openPrivate(me, e, c);
-    if (opened == null) return true; // pas pour moi : je fais juste suivre, sans rien afficher.
+    if (opened == null)
+      return true; // pas pour moi : je fais juste suivre, sans rien afficher.
     final convo = conversations[opened.fromId] ?? const <ChatMessage>[];
     if (_tooOld(opened.ts)) return true;
-    final person = people.putIfAbsent(opened.fromId, () => Person(opened.fromId, opened.fromName));
+    final person = people.putIfAbsent(
+      opened.fromId,
+      () => Person(opened.fromId, opened.fromName),
+    );
     person.lastSeen = DateTime.now();
     if (opened.ack != null) {
       // Accusé de réception : le destinataire a bien reçu mon message.
@@ -295,8 +470,11 @@ class MeshNode {
     }
     final text = opened.text;
     if (text == null || text.length > kMaxText) return true;
+    final md = opened.media == null ? null : MediaMeta.fromJson(opened.media);
+    if (opened.media != null && md == null) return true;
     // Déjà reçu : rejeu, on ne l'affiche pas deux fois (mais on renvoie l'accusé).
-    final dup = opened.mid != null && convo.any((m) => !m.mine && m.mid == opened.mid);
+    final dup =
+        opened.mid != null && convo.any((m) => !m.mine && m.mid == opened.mid);
     // On répond "bien reçu", lui aussi chiffré : les relais ne voient pas la différence.
     if (opened.mid != null && person.encId != null) {
       final ack = _seal({'ack': opened.mid}, opened.fromId);
@@ -304,22 +482,38 @@ class MeshNode {
     }
     if (dup) return true;
     _addMessage(
-        opened.fromId,
-        ChatMessage(
-            fromId: opened.fromId,
-            fromName: opened.fromName,
-            text: text,
-            mid: opened.mid,
-            time: DateTime.fromMillisecondsSinceEpoch(opened.ts)));
+      opened.fromId,
+      ChatMessage(
+        fromId: opened.fromId,
+        fromName: opened.fromName,
+        text: text,
+        mid: opened.mid,
+        media: md,
+        time: DateTime.fromMillisecondsSinceEpoch(opened.ts),
+      ),
+    );
+    if (md != null) media?.expect(md);
     if (openConversation != opened.fromId) {
+      final body = text.isEmpty && md != null ? mediaLabel(md) : text;
       _notices.add(
-          IncomingNotice(opened.fromId, '${opened.fromName} #${shortTag(opened.fromId)}', text));
+        IncomingNotice(
+          opened.fromId,
+          '${opened.fromName} #${shortTag(opened.fromId)}',
+          body,
+        ),
+      );
     }
     return true;
   }
 
   /// Fabrique un paquet privé chiffré et signé (null si la clé du destinataire est inconnue).
-  String? _seal(Map<String, String?> body, String to, {String? text, int? ts}) {
+  String? _seal(
+    Map<String, String?> body,
+    String to, {
+    String? text,
+    int? ts,
+    Map<String, dynamic>? mediaJson,
+  }) {
     final enc = people[to]?.encId;
     if (enc == null) return null;
     final p = {
@@ -327,14 +521,16 @@ class MeshNode {
       'id': _newId(),
       'h': 0,
       ...sealPrivate(
-          me: me,
-          myName: myName,
-          recipientId: to,
-          recipientEncId: enc,
-          text: text,
-          ts: ts ?? DateTime.now().millisecondsSinceEpoch,
-          mid: body['mid'],
-          ack: body['ack']),
+        me: me,
+        myName: myName,
+        recipientId: to,
+        recipientEncId: enc,
+        text: text,
+        ts: ts ?? DateTime.now().millisecondsSinceEpoch,
+        mid: body['mid'],
+        ack: body['ack'],
+        media: mediaJson,
+      ),
     };
     _markSeen(p['id'] as String);
     return jsonEncode(p);
@@ -363,8 +559,14 @@ class MeshNode {
   void send(String convo, String text) {
     final now = DateTime.now();
     final mid = _newId();
-    final msg =
-        ChatMessage(fromId: myId, fromName: myName, text: text, time: now, mine: true, mid: mid);
+    final msg = ChatMessage(
+      fromId: myId,
+      fromName: myName,
+      text: text,
+      time: now,
+      mine: true,
+      mid: mid,
+    );
     _addMessage(convo, msg);
     final String? frame;
     if (convo == kGroupId) {
@@ -381,11 +583,97 @@ class MeshNode {
       _markSeen(mid);
       frame = jsonEncode(p);
     } else {
-      frame = _seal({'mid': mid}, convo, text: text, ts: now.millisecondsSinceEpoch);
+      frame = _seal(
+        {'mid': mid},
+        convo,
+        text: text,
+        ts: now.millisecondsSinceEpoch,
+      );
     }
     if (links.isEmpty || frame == null) msg.failed = true;
     if (frame != null) _flood(frame);
     _notify();
+  }
+
+  /// Envoie une photo ou une vidéo (déjà compressée) dans [convo].
+  /// Renvoie false si c'est impossible (trop lourd, photos pas activées).
+  Future<bool> sendMedia(
+    String convo,
+    Uint8List bytes, {
+    required String kind,
+    required String mime,
+    String caption = '',
+  }) async {
+    final store = media;
+    if (store == null || bytes.isEmpty || bytes.length > kMaxMediaBytes)
+      return false;
+    if (caption.length > kMaxText) return false;
+    final prepared = await prepareMedia(bytes, kind, mime);
+    final meta = prepared.meta;
+    final path = store.pathFor(meta);
+    await store.dir.create(recursive: true);
+    await File(path).writeAsBytes(bytes, flush: true);
+    store.hold(meta, path);
+
+    final now = DateTime.now();
+    final mid = _newId();
+    final msg = ChatMessage(
+      fromId: myId,
+      fromName: myName,
+      text: caption,
+      time: now,
+      mine: true,
+      mid: mid,
+      media: meta,
+      path: path,
+    )..progress = 0;
+    _addMessage(convo, msg);
+    final String? frame;
+    if (convo == kGroupId) {
+      final p = <String, dynamic>{
+        't': 'grp',
+        'id': mid,
+        'h': 0,
+        'src': myId,
+        'name': myName,
+        'text': caption,
+        'ts': now.millisecondsSinceEpoch,
+        'm': meta.toJson(),
+      };
+      p['sig'] = me.sign(grpFields(p));
+      _markSeen(mid);
+      frame = jsonEncode(p);
+    } else {
+      frame = _seal(
+        {'mid': mid},
+        convo,
+        text: caption,
+        ts: now.millisecondsSinceEpoch,
+        mediaJson: meta.toJson(),
+      );
+    }
+    if (links.isEmpty || frame == null) msg.failed = true;
+    if (frame == null) {
+      msg.progress = null;
+      _notify();
+      return false;
+    }
+    _flood(frame);
+    _notify();
+    var lastShown = 0.0;
+    await store.sendAll(
+      prepared,
+      progress: (x) {
+        msg.progress = x;
+        if (x - lastShown >= 0.02 || x >= 1) {
+          lastShown = x;
+          _notify();
+        }
+      },
+    );
+    msg.progress = null;
+    _notify();
+    return true;
   }
 
   void rename(String name) {
@@ -403,19 +691,35 @@ class MeshNode {
 
   /// Sauvegarde (conversations + noms) pour retrouver l'historique après redémarrage.
   String exportState() => jsonEncode({
-        'people': {
-          for (final p in people.values)
-            p.id: {'n': p.name, 'g': p.guest, 'x': p.encId, 'v': p.verified, 'a': p.lastAnnTs}
+    'people': {
+      for (final p in people.values)
+        p.id: {
+          'n': p.name,
+          'g': p.guest,
+          'x': p.encId,
+          'v': p.verified,
+          'a': p.lastAnnTs,
         },
-        'convos': conversations.map((k, v) =>
-            MapEntry(k, v.skip(v.length > 300 ? v.length - 300 : 0).map((m) => m.toJson()).toList())),
-      });
+    },
+    'convos': conversations.map(
+      (k, v) => MapEntry(
+        k,
+        v
+            .skip(v.length > 300 ? v.length - 300 : 0)
+            .map((m) => m.toJson())
+            .toList(),
+      ),
+    ),
+  });
 
   void importState(String raw) {
     try {
       final j = jsonDecode(raw) as Map<String, dynamic>;
       (j['people'] as Map<String, dynamic>).forEach((id, v) {
-        final p = people.putIfAbsent(id, () => Person(id, (v as Map)['n'] as String));
+        final p = people.putIfAbsent(
+          id,
+          () => Person(id, (v as Map)['n'] as String),
+        );
         p.guest = (v as Map)['g'] == true;
         p.encId = v['x'] as String?;
         p.verified = v['v'] == true;

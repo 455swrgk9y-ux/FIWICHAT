@@ -25,6 +25,15 @@ Pas de serveur, pas de compte, pas de données mobiles.
   Changer de pseudo pour un nom déjà pris à portée est refusé.
 - L'historique reste sur le téléphone. L'appli continue de recevoir et relayer écran éteint.
 
+## Photos et vidéos
+
+Bouton 🖼 à gauche du champ de texte : photo de la galerie, photo prise sur le moment, vidéo de la
+galerie ou vidéo filmée (30 s). Ça marche dans le salon général, en privé et sur la page invité.
+Les photos sont réduites (1600 px, ~200 Ko) ; la taille maximale est de 8 Mo.
+Le fichier est chiffré, découpé en morceaux de 9 Ko et envoyé doucement pour passer aussi en
+Bluetooth. Les morceaux perdus sont redemandés automatiquement. En privé, seul le destinataire
+peut ouvrir la photo : les relais transportent des morceaux illisibles.
+
 ## Sécurité
 
 - **Tout est signé** : présence, salon, messages privés. Personne ne peut écrire sous le nom
