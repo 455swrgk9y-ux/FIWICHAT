@@ -82,6 +82,22 @@ class AppServices {
 
   /// État des radios (Bluetooth, Wi-Fi, localisation), relu toutes les 5 s.
   final radios = ValueNotifier<RadioStatus>(const RadioStatus());
+
+  /// Vrai s'il manque une autorisation pour le Bluetooth (appareils à proximité).
+  final permsMissing = ValueNotifier<bool>(false);
+
+  /// Redemande les autorisations ; si elles ont été refusées pour de bon,
+  /// ouvre les réglages de l'appli.
+  Future<void> fixPermissions() async {
+    final still = await nearby.checkPermissions(ask: true);
+    if (still.isNotEmpty) {
+      await NearbyTransport.openSettings();
+    } else {
+      await nearby.restartSearch();
+    }
+    permsMissing.value = still.isNotEmpty;
+  }
+
   Timer? _radioTimer;
   int _radioTick = 0;
 
@@ -197,15 +213,20 @@ class AppServices {
   Future<void> _watchRadios() async {
     final before = radios.value;
     final now = await RadioStatus.read();
+    if (Platform.isAndroid) await nearby.checkPermissions();
     radios.value = now;
+    permsMissing.value = nearby.missing.isNotEmpty;
     if (!now.known) return;
-    final turnedOn =
-        (now.bluetoothOn && !before.bluetoothOn) ||
-        (now.locationOn && !before.locationOn) ||
-        (now.wifiOn && !before.wifiOn);
+    // Une radio allumée OU éteinte : on relance la recherche. Wi-Fi coupé =
+    // FIWICHAT continue tout seul par Bluetooth.
+    final changed =
+        before.known &&
+        (now.bluetoothOn != before.bluetoothOn ||
+            now.locationOn != before.locationOn ||
+            now.wifiOn != before.wifiOn);
     // Si la recherche a échoué, on réessaie calmement (toutes les minutes).
     final retry = !nearby.running && _radioTick++ % 12 == 0;
-    if (now.nearbyReady && (turnedOn || retry)) {
+    if (now.nearbyReady && (changed || retry)) {
       await nearby.restartSearch();
     }
   }
@@ -739,6 +760,29 @@ class _RadiosBanner extends StatelessWidget {
     valueListenable: services.radios,
     builder: (context, r, _) {
       final off = r.off;
+      if (services.permsMissing.value) {
+        return Card(
+          key: const Key('perms-banner'),
+          margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          color: Theme.of(context).colorScheme.errorContainer,
+          child: ListTile(
+            leading: const Icon(Icons.bluetooth_disabled),
+            title: const Text(
+              'FIWICHAT n\'a pas le droit d\'utiliser le Bluetooth',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              'Sans cette autorisation, les messages ne passent que par le Wi-Fi. '
+              'Touche « Autoriser » et accepte « Appareils à proximité ».',
+            ),
+            trailing: FilledButton(
+              key: const Key('perms-fix'),
+              onPressed: services.fixPermissions,
+              child: const Text('Autoriser'),
+            ),
+          ),
+        );
+      }
       if (off.isEmpty) return const SizedBox.shrink();
       return Card(
         key: const Key('radios-banner'),
@@ -1757,7 +1801,7 @@ class _GuestScreenState extends State<GuestScreen> {
 
   Future<void> _open() async {
     setState(() => _busy = true);
-    await NearbyTransport.requestPermissions();
+    await widget.services.nearby.checkPermissions(ask: true);
     await guests.openHotspot();
     if (mounted) setState(() => _busy = false);
   }
@@ -2184,7 +2228,7 @@ class _QrInstallScreenState extends State<QrInstallScreen> {
 
   Future<void> _open() async {
     setState(() => _busy = true);
-    await NearbyTransport.requestPermissions();
+    await widget.services.nearby.checkPermissions(ask: true);
     await guests.openHotspot();
     if (mounted) setState(() => _busy = false);
   }
@@ -2354,8 +2398,8 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
             if (Platform.isAndroid)
               Text(
                 nearby.running
-                    ? 'Relais à proximité : actif'
-                    : 'Relais à proximité : inactif${nearby.error != null ? ' (${nearby.error})' : ''}',
+                    ? 'Bluetooth : actif · ${nearby.connectedCount} téléphone(s) relié(s)${nearby.waitingCount > 0 ? ' · ${nearby.waitingCount} en cours' : ''}'
+                    : 'Bluetooth : inactif${nearby.error != null ? ' (${nearby.error})' : ''}',
               ),
             const SizedBox(height: 8),
             const Text('Mon adresse Wi-Fi :'),

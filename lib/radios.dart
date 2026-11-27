@@ -32,12 +32,14 @@ class RadioStatus {
   /// Les radios utiles qui sont éteintes, dans l'ordre où les allumer.
   List<String> get off => [
     if (hasBluetooth && !bluetoothOn) 'bluetooth',
-    if (!wifiOn) 'wifi',
+    // Wi-Fi éteint : pas grave si le Bluetooth marche (FIWICHAT passe par lui).
+    if (!wifiOn && !(hasBluetooth && bluetoothOn)) 'wifi',
     if (!locationOn) 'location',
   ];
 
   /// Nearby (Bluetooth / Wi-Fi Direct) peut chercher les téléphones proches.
-  bool get nearbyReady => bluetoothOn && locationOn;
+  /// La localisation aide sur les anciens Android, mais n'est pas obligatoire.
+  bool get nearbyReady => bluetoothOn;
 
   factory RadioStatus.fromMap(Map<String, dynamic> m) {
     bool b(String k, bool d) => m[k] is bool ? m[k] as bool : d;

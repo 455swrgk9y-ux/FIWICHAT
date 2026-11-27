@@ -257,6 +257,8 @@ class MeshNode {
         // Seulement les gens encore là (vus récemment).
         if (now.difference(at) < const Duration(seconds: 50)) link.send(f);
       }
+      // Un nouveau chemin (Wi-Fi ou Bluetooth) : on renvoie ce qui n'était pas parti.
+      Timer(const Duration(milliseconds: 300), _resendFailed);
     }
     _notify();
   }
@@ -463,6 +465,36 @@ class MeshNode {
   }
 
   final Map<String, DateTime> _lastResend = {};
+
+  /// Renvoie mes messages restés « personne à portée » (salon et privés).
+  void _resendFailed() {
+    if (links.isEmpty) return;
+    for (final m in conversations[kGroupId] ?? const <ChatMessage>[]) {
+      if (!m.mine || !m.failed || m.mid == null) continue;
+      if (_tooOld(m.time.millisecondsSinceEpoch)) continue;
+      if (m.media != null && m.path == null) continue;
+      final p = <String, dynamic>{
+        't': 'grp',
+        'id': m.mid,
+        'h': 0,
+        'src': myId,
+        'name': m.fromName,
+        'text': m.text,
+        'ts': m.time.millisecondsSinceEpoch,
+        if (m.media != null) 'm': m.media!.toJson(),
+      };
+      p['sig'] = me.sign(grpFields(p));
+      _flood(jsonEncode(p));
+      m.failed = false;
+    }
+    for (final convo in conversations.keys.toList()) {
+      if (convo == kGroupId) continue;
+      if (conversations[convo]!.any((m) => m.mine && !m.delivered)) {
+        resendPending(convo);
+      }
+    }
+    _notify();
+  }
 
   /// Renvoie mes messages privés pas encore reçus par [to] (il vient de
   /// réapparaître). Même identifiant : il ne les verra pas deux fois.
