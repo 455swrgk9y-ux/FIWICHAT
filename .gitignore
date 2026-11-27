@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Clé de signature : jamais dans le dépôt
+*.p12
+*.jks
+*.keystore

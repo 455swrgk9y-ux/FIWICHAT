@@ -30,11 +30,28 @@ android {
         versionName = flutter.versionName
     }
 
+    // Clé de signature PERMANENTE de FIWICHAT. Toujours la même : c'est ce qui permet
+    // d'installer une nouvelle version par-dessus l'ancienne. Le fichier n'est jamais
+    // dans le dépôt : GitHub le recrée à partir du secret FIWICHAT_KEYSTORE.
+    val releaseKey = file("fiwichat.p12")
+    signingConfigs {
+        create("release") {
+            if (releaseKey.exists()) {
+                storeFile = releaseKey
+                storeType = "pkcs12"
+                storePassword = "fiwichat"
+                keyAlias = "fiwichat"
+                keyPassword = "fiwichat"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Sans la clé (sur un ordinateur de développeur), on signe avec la clé de test.
+            signingConfig =
+                if (releaseKey.exists()) signingConfigs.getByName("release")
+                else signingConfigs.getByName("debug")
         }
     }
 }

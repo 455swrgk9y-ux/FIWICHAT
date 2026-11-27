@@ -24,8 +24,24 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
-      - run: flutter build apk --release
-      - run: cp build/app/outputs/flutter-apk/app-release.apk fiwichat.apk
+      # La clé permanente vient du secret FIWICHAT_KEYSTORE (jamais dans le dépôt).
+      # Sans elle, on ne publie rien : une version signée autrement ne pourrait pas
+      # s'installer par-dessus l'ancienne.
+      - name: Clé de signature permanente
+        env:
+          FIWICHAT_KEYSTORE: ${{ secrets.FIWICHAT_KEYSTORE }}
+        run: |
+          if [ -z "$FIWICHAT_KEYSTORE" ]; then
+            echo "::error::Il manque le secret FIWICHAT_KEYSTORE (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          echo "$FIWICHAT_KEYSTORE" | tr -d ' \r\n' | base64 -d > android/app/fiwichat.p12
+      # Le numéro de version augmente à chaque construction : Android accepte la mise à jour.
+      - run: flutter build apk --release --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
+      - run: |
+          cp build/app/outputs/flutter-apk/app-release.apk fiwichat.apk
+          echo '{"build": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}' > version.json
+          rm -f android/app/fiwichat.p12
       - uses: actions/upload-artifact@v4
         with:
           name: fiwichat-apk
@@ -37,5 +53,7 @@ jobs:
           tag_name: derniere-version
           name: FIWICHAT (dernière version)
           body: Télécharge fiwichat.apk sur ton téléphone Android et ouvre-le pour l'installer.
-          files: fiwichat.apk
+          files: |
+            fiwichat.apk
+            version.json
           make_latest: true

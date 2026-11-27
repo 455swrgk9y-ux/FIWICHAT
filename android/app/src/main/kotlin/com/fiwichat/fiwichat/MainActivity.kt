@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.net.wifi.WifiManager
@@ -44,6 +45,10 @@ class MainActivity : FlutterActivity() {
                     "startGuestHotspot" -> startGuestHotspot(result)
                     "getApkPath" -> result.success(applicationInfo.sourceDir)
                     "radioStatus" -> result.success(radioStatus())
+                    "appVersion" -> result.success(appVersion())
+                    "shareDir" -> result.success(File(cacheDir, "share").apply { mkdirs() }.absolutePath)
+                    "installApk" -> result.success(installApk(call.argument<String>("path") ?: ""))
+                    "openUrl" -> result.success(openUrl(call.argument<String>("url") ?: ""))
                     "openRadioSettings" -> result.success(openRadioSettings(call.argument<String>("which")))
                     "shareApk" -> shareApk(call.argument<String>("via"), result)
                     "startKeepAlive" -> {
@@ -61,6 +66,54 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /** Numéro de cette version de FIWICHAT (augmente à chaque nouvelle version). */
+    private fun appVersion(): Long =
+        packageManager.getPackageInfo(packageName, 0).longVersionCode
+
+    @Suppress("DEPRECATION")
+    private fun signatures(info: android.content.pm.PackageInfo?): Set<String> {
+        val si = info?.signingInfo ?: return emptySet()
+        val sigs = if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+        return sigs?.map { it.toCharsString() }?.toSet() ?: emptySet()
+    }
+
+    /**
+     * Installe une nouvelle version téléchargée. Avant, on vérifie qu'elle est bien
+     * signée avec la même clé que FIWICHAT et qu'elle est plus récente : un faux
+     * fichier envoyé par un inconnu est refusé.
+     * Réponses : "ok", "invalid", "bad-signature", "not-newer", "error".
+     */
+    private fun installApk(path: String): String {
+        return try {
+            val f = File(path)
+            val flags = PackageManager.GET_SIGNING_CERTIFICATES
+            val theirs = packageManager.getPackageArchiveInfo(f.absolutePath, flags) ?: return "invalid"
+            if (theirs.packageName != packageName) return "invalid"
+            val mine = packageManager.getPackageInfo(packageName, flags)
+            val mySigs = signatures(mine)
+            val theirSigs = signatures(theirs)
+            // Si Android ne sait pas lire la signature ici, son installateur la vérifiera de toute façon.
+            if (mySigs.isNotEmpty() && theirSigs.isNotEmpty() && mySigs.intersect(theirSigs).isEmpty()) return "bad-signature"
+            if (theirs.longVersionCode <= mine.longVersionCode) return "not-newer"
+            val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
+            val i = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(i)
+            "ok"
+        } catch (e: Exception) {
+            "error"
+        }
+    }
+
+    private fun openUrl(url: String): Boolean = try {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (e: Exception) {
+        false
     }
 
     /** Quelles radios ce téléphone possède, et lesquelles sont allumées. */

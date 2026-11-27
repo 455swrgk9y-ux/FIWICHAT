@@ -12,6 +12,7 @@ import 'crypto.dart';
 import 'guest_server.dart';
 import 'mesh.dart';
 import 'radios.dart';
+import 'updates.dart';
 import 'transport_lan.dart';
 import 'transport_nearby.dart';
 
@@ -56,6 +57,9 @@ class AppServices {
   final GuestServer guests;
   final _notifs = FlutterLocalNotificationsPlugin();
 
+  /// Cherche les nouvelles versions (internet ou téléphones d'à côté).
+  final updater = Updater();
+
   /// État des radios (Bluetooth, Wi-Fi, localisation), relu toutes les 5 s.
   final radios = ValueNotifier<RadioStatus>(const RadioStatus());
   Timer? _radioTimer;
@@ -80,6 +84,10 @@ class AppServices {
       );
     });
     mesh.start();
+    await updater.start();
+    lan
+      ..myBuild = updater.myBuild
+      ..onPeerBuild = updater.notePeer;
     await lan.start();
     try {
       await guests.startServer();
@@ -349,6 +357,7 @@ class HomeScreen extends StatelessWidget {
                 ),
                 child: _LinksBar(mesh: mesh),
               ),
+              _UpdateBanner(services: services),
               _RadiosBanner(services: services),
               if (mesh.nameUsedByOther(mesh.myName))
                 Card(
@@ -497,6 +506,91 @@ class _LinksBar extends StatelessWidget {
 }
 
 // ======================= Radios / connexions =======================
+
+/// Bandeau « Nouvelle version » sur l'accueil.
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({required this.services});
+  final AppServices services;
+
+  Future<void> _go(BuildContext context) async {
+    final msg = await services.updater.downloadAndInstall();
+    if (msg != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = services.updater;
+    return ValueListenableBuilder<UpdateOffer?>(
+      valueListenable: u.offer,
+      builder: (context, o, _) {
+        if (o == null) return const SizedBox.shrink();
+        return ValueListenableBuilder<double?>(
+          valueListenable: u.progress,
+          builder: (context, p, _) => Card(
+            key: const Key('update-banner'),
+            margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            color: brand,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.system_update, color: Colors.white),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Nouvelle version de FIWICHAT',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 17,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    o.fromPhone
+                        ? 'Un téléphone à côté de toi l\'a. Tes messages sont gardés.'
+                        : 'Elle s\'installe par-dessus celle-ci. Tes messages sont gardés.',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  const SizedBox(height: 10),
+                  if (p != null) ...[
+                    LinearProgressIndicator(
+                      value: p > 0 ? p : null,
+                      color: Colors.white,
+                      backgroundColor: Colors.white24,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Téléchargement… ${(p * 100).round()} %',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ] else
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: brand,
+                      ),
+                      onPressed: () => _go(context),
+                      icon: const Icon(Icons.download),
+                      label: const Text('Mettre à jour'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
 
 /// Bandeau sur l'accueil quand une radio utile est éteinte.
 class _RadiosBanner extends StatelessWidget {
