@@ -28,14 +28,16 @@ jobs:
       # Sans elle, on ne publie rien : une version signée autrement ne pourrait pas
       # s'installer par-dessus l'ancienne.
       - name: Clé de signature permanente
+        id: key
         env:
           FIWICHAT_KEYSTORE: ${{ secrets.FIWICHAT_KEYSTORE }}
         run: |
           if [ -z "$FIWICHAT_KEYSTORE" ]; then
-            echo "::error::Il manque le secret FIWICHAT_KEYSTORE (Settings > Secrets and variables > Actions)."
-            exit 1
+            echo "haskey=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$FIWICHAT_KEYSTORE" | tr -d ' \r\n' | base64 -d > android/app/fiwichat.p12
+            echo "haskey=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "$FIWICHAT_KEYSTORE" | tr -d ' \r\n' | base64 -d > android/app/fiwichat.p12
       # Le numéro de version augmente à chaque construction : Android accepte la mise à jour.
       - run: flutter build apk --release --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
       - run: |
@@ -49,6 +51,7 @@ jobs:
       # Lien de téléchargement simple, à partager avec les amis :
       # https://github.com/<compte>/<dépôt>/releases/latest/download/fiwichat.apk
       - uses: softprops/action-gh-release@v2
+        if: steps.key.outputs.haskey == 'true'
         with:
           tag_name: derniere-version
           name: FIWICHAT (dernière version)
@@ -57,3 +60,8 @@ jobs:
             fiwichat.apk
             version.json
           make_latest: true
+      - name: Vérifier la clé
+        if: steps.key.outputs.haskey != 'true'
+        run: |
+          echo "::error::L'appli a été construite mais PAS publiée : il manque le secret FIWICHAT_KEYSTORE (Settings > Secrets and variables > Actions)."
+          exit 1
