@@ -112,8 +112,12 @@ class IncomingNotice {
 class MeshNode {
   MeshNode({required this.me, required this.myName, this.guest = false});
 
-  final Identity me;
+  /// Mon identité. La clé de chiffrement change chaque jour (voir crypto.dart).
+  Identity me;
   String myName;
+
+  /// Appelé quand [me] change (nouvelle clé du jour) : il faut la sauvegarder.
+  void Function()? onIdentityChanged;
   final bool guest;
 
   final Map<String, Link> links = {};
@@ -142,16 +146,44 @@ class MeshNode {
 
   String get myId => me.id;
 
+  bool _background = false;
+
   void start() {
+    rotateKeyIfNeeded();
     _announce();
-    _timer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    // Appli en arrière-plan : on s'annonce deux fois moins souvent (batterie).
+    _timer = Timer.periodic(Duration(seconds: _background ? 30 : 15), (_) {
+      rotateKeyIfNeeded();
       _announce();
       _notify();
     });
   }
 
+  /// Économie de batterie quand l'appli n'est pas à l'écran.
+  void setBackground(bool bg) {
+    if (bg == _background) return;
+    _background = bg;
+    if (_timer != null) _startTimer();
+  }
+
+  bool get inBackground => _background;
+
+  /// Change la clé de chiffrement si elle a plus d'un jour.
+  bool rotateKeyIfNeeded([DateTime? now]) {
+    if (!me.needsRotation(now)) return false;
+    me = me.rotated(now);
+    onIdentityChanged?.call();
+    return true;
+  }
+
   void stop() {
     _timer?.cancel();
+    _timer = null;
     media?.stop();
   }
 
@@ -336,6 +368,30 @@ class MeshNode {
 
   final Map<String, double> _chunkTokens = {};
 
+  // Anti-spam par personne (et pas seulement par voisin) : quelqu'un qui inonde
+  // le salon est freiné partout, même s'il passe par plusieurs chemins.
+  // 20 paquets d'avance, puis 1 par seconde. Compté seulement après la
+  // signature : personne ne peut épuiser le crédit d'un autre.
+  final Map<String, (double, DateTime)> _senderBuckets = {};
+  static const double kSenderBurst = 20;
+
+  bool _allowSender(String src) {
+    if (src == myId) return true;
+    final now = DateTime.now();
+    final (tokens, at) = _senderBuckets[src] ?? (kSenderBurst, now);
+    final t = (tokens + now.difference(at).inMilliseconds / 1000)
+        .clamp(0, kSenderBurst)
+        .toDouble();
+    if (_senderBuckets.length > 2000) _senderBuckets.clear();
+    if (t < 1) {
+      _senderBuckets[src] = (t, now);
+      dropped++;
+      return false;
+    }
+    _senderBuckets[src] = (t - 1, now);
+    return true;
+  }
+
   bool _onChunk(Map<String, dynamic> p) {
     final f = p['f'], i = p['i'], d = p['d'];
     if (f is! String || i is! int || d is! String) return false;
@@ -389,9 +445,11 @@ class MeshNode {
     if (name.trim().isEmpty || name.length > 40) return false;
     if (!verifySig(src, annFields(p), p['sig'])) return false;
     if (src == myId) return true;
+    if (!_allowSender(src)) return false;
     final person = people.putIfAbsent(src, () => Person(src, name));
     // Une vieille annonce rejouée ne peut pas remettre un ancien pseudo.
     if (ts < person.lastAnnTs) return false;
+    final wasAway = !person.online || person.encId != x;
     person
       ..lastAnnTs = ts
       ..name = name
@@ -399,8 +457,48 @@ class MeshNode {
       ..guest = p['guest'] == true
       ..lastSeen = DateTime.now();
     _lastAnnounce[src] = (frame, DateTime.now());
+    if (wasAway) resendPending(src);
     _notify();
     return true;
+  }
+
+  final Map<String, DateTime> _lastResend = {};
+
+  /// Renvoie mes messages privés pas encore reçus par [to] (il vient de
+  /// réapparaître). Même identifiant : il ne les verra pas deux fois.
+  int resendPending(String to, {bool force = false}) {
+    final now = DateTime.now();
+    final last = _lastResend[to];
+    if (!force &&
+        last != null &&
+        now.difference(last) < const Duration(seconds: 20)) {
+      return 0;
+    }
+    final convo = conversations[to];
+    if (convo == null || to == kGroupId) return 0;
+    var n = 0;
+    for (final m in convo) {
+      if (!m.mine || m.delivered || m.mid == null) continue;
+      if (_tooOld(m.time.millisecondsSinceEpoch)) continue;
+      if (m.media != null && m.path == null) continue;
+      final frame = _seal(
+        {'mid': m.mid},
+        to,
+        text: m.text,
+        ts: m.time.millisecondsSinceEpoch,
+        mediaJson: m.media?.toJson(),
+      );
+      if (frame == null) continue;
+      if (links.isEmpty) break;
+      _flood(frame);
+      m.failed = false;
+      n++;
+    }
+    if (n > 0) {
+      _lastResend[to] = now;
+      _notify();
+    }
+    return n;
   }
 
   bool _onGroup(Map<String, dynamic> p) {
@@ -416,6 +514,7 @@ class MeshNode {
     if (p['m'] != null && md == null) return false;
     if (!verifySig(src, grpFields(p), p['sig'])) return false;
     if (src == myId) return true;
+    if (!_allowSender(src)) return false;
     // Déjà reçu (même après un redémarrage) : c'est un rejeu, on l'ignore.
     if ((conversations[kGroupId] ?? const []).any(
       (m) => m.mid == id && m.fromId == src,
@@ -741,6 +840,36 @@ class MeshNode {
       conversations.putIfAbsent(kGroupId, () => []);
     } catch (_) {}
     _notify();
+  }
+
+  /// Efface un message de CE téléphone (les autres gardent leur copie).
+  void deleteMessage(String convo, ChatMessage m) {
+    conversations[convo]?.remove(m);
+    _deleteFileIfUnused(m);
+    _notify();
+  }
+
+  /// Vide une conversation sur ce téléphone.
+  void clearConversation(String convo) {
+    final list = conversations[convo];
+    if (list == null) return;
+    final old = List.of(list);
+    list.clear();
+    for (final m in old) {
+      _deleteFileIfUnused(m);
+    }
+    unread.remove(convo);
+    _notify();
+  }
+
+  void _deleteFileIfUnused(ChatMessage m) {
+    final md = m.media, p = m.path;
+    if (md == null || p == null) return;
+    if (_messagesWith(md.fid).isNotEmpty) return;
+    media?.forget(md.fid);
+    try {
+      File(p).deleteSync();
+    } catch (_) {}
   }
 
   void setVerified(String id, bool v) {

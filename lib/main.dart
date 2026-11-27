@@ -14,6 +14,8 @@ import 'guest_server.dart';
 import 'media.dart';
 import 'mesh.dart';
 import 'radios.dart';
+import 'settings.dart';
+import 'vault.dart';
 import 'updates.dart';
 import 'voice.dart';
 import 'transport_lan.dart';
@@ -21,6 +23,9 @@ import 'transport_nearby.dart';
 
 const _wifiChannel = MethodChannel('fiwichat/wifi');
 const brand = Color(0xFF00897B);
+
+/// Pour ouvrir une conversation depuis une notification.
+final navigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +47,8 @@ class FiwiApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
       ),
+      navigatorKey: navigatorKey,
+      builder: (context, child) => AppShell(child: child ?? const SizedBox()),
       home: home ?? const StartScreen(),
     );
   }
@@ -49,16 +56,26 @@ class FiwiApp extends StatelessWidget {
 
 /// Tout ce qui tourne en arrière-plan : maillage, transports, page invité, notifications.
 class AppServices {
-  AppServices(this.mesh)
+  AppServices(this.mesh, {this.vault})
     : lan = LanTransport(mesh),
       nearby = NearbyTransport(mesh),
-      guests = GuestServer(mesh);
+      guests = GuestServer(mesh) {
+    current = this;
+  }
+
+  /// Les services en marche (un seul à la fois).
+  static AppServices? current;
 
   final MeshNode mesh;
+
+  /// Coffre-fort local (historique et identité chiffrés). Null dans les tests.
+  final Vault? vault;
+  AppLifecycleListener? _life;
   final LanTransport lan;
   final NearbyTransport nearby;
   final GuestServer guests;
   final _notifs = FlutterLocalNotificationsPlugin();
+  bool _notifsReady = false;
 
   /// Cherche les nouvelles versions (internet ou téléphones d'à côté).
   final updater = Updater();
@@ -67,7 +84,6 @@ class AppServices {
   final radios = ValueNotifier<RadioStatus>(const RadioStatus());
   Timer? _radioTimer;
   int _radioTick = 0;
-  int _notifId = 0;
 
   Timer? _saveTimer;
 
@@ -77,8 +93,11 @@ class AppServices {
     } catch (_) {}
     // Historique des conversations (gardé uniquement sur ce téléphone).
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('state');
+    final v = vault;
+    final saved = v != null ? await v.readState() : prefs.getString('state');
     if (saved != null) mesh.importState(saved);
+    // Nouvelle clé de chiffrement du jour : on la garde aussitôt.
+    mesh.onIdentityChanged = () => v?.writeSecret(mesh.me.secretBase64);
     // Photos et vidéos : rangées dans l'espace privé de l'appli.
     try {
       final dir = await _wifiChannel.invokeMethod<String>('mediaDir');
@@ -88,10 +107,10 @@ class AppServices {
     }
     mesh.changes.listen((_) {
       _saveTimer?.cancel();
-      _saveTimer = Timer(
-        const Duration(seconds: 2),
-        () => prefs.setString('state', mesh.exportState()),
-      );
+      _saveTimer = Timer(const Duration(seconds: 2), () {
+        final st = mesh.exportState();
+        v != null ? v.writeState(st) : prefs.setString('state', st);
+      });
     });
     mesh.start();
     await updater.start();
@@ -113,9 +132,66 @@ class AppServices {
       // Android : garde FIWICHAT actif en arrière-plan pour recevoir et relayer.
       await _wifiChannel.invokeMethod('startKeepAlive');
     } catch (_) {}
+    // Économie de batterie : moins de signaux quand l'appli n'est pas à l'écran.
+    _life = AppLifecycleListener(
+      onHide: () => setBackground(true),
+      onShow: () => setBackground(false),
+    );
+  }
+
+  /// Arrière-plan : annonces et signaux Wi-Fi moins fréquents, radios non surveillées.
+  void setBackground(bool bg) {
+    mesh.setBackground(bg);
+    lan.setBackground(bg);
+    _radioTimer?.cancel();
+    if (!bg) {
+      _watchRadios();
+      _radioTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => _watchRadios(),
+      );
+    }
   }
 
   void stopWatchingRadios() => _radioTimer?.cancel();
+
+  void dispose() {
+    _life?.dispose();
+    _radioTimer?.cancel();
+  }
+
+  /// Une notification par conversation (la nouvelle remplace l'ancienne).
+  static int noticeId(String convo) => convo.hashCode & 0x7fffffff;
+
+  /// Efface la notification d'une conversation qu'on vient d'ouvrir.
+  void clearNotice(String convo) {
+    if (!_notifsReady) return;
+    try {
+      unawaited(_notifs.cancel(id: noticeId(convo)).catchError((_) {}));
+    } catch (_) {}
+  }
+
+  /// Nom affiché en haut d'une conversation.
+  String titleOf(String convo) {
+    if (convo == kGroupId) return 'Salon général';
+    final p = mesh.people[convo];
+    return p == null ? 'Conversation' : '${p.name} #${p.tag}';
+  }
+
+  /// Ouvre une conversation (après avoir touché une notification).
+  void openConversation(String? convo) {
+    if (convo == null || convo.isEmpty) return;
+    if (convo != kGroupId && !mesh.people.containsKey(convo)) return;
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    nav.popUntil((r) => r.isFirst);
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) =>
+            ChatScreen(mesh: mesh, convo: convo, title: titleOf(convo)),
+      ),
+    );
+  }
 
   /// Dès qu'une radio est rallumée, FIWICHAT relance la recherche tout seul.
   Future<void> _watchRadios() async {
@@ -141,7 +217,9 @@ class AppServices {
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
           iOS: DarwinInitializationSettings(),
         ),
+        onDidReceiveNotificationResponse: (r) => openConversation(r.payload),
       );
+      _notifsReady = true;
       await _notifs
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
@@ -149,10 +227,13 @@ class AppServices {
           ?.requestNotificationsPermission();
       // Seuls les messages qui me sont destinés arrivent ici (jamais ceux que je relaie).
       mesh.notices.listen((n) {
+        // Avec un code PIN, la notification ne montre pas le message.
+        final hidden = AppConfig.pinSet;
         _notifs.show(
-          id: _notifId++ % 1000,
-          title: n.title,
-          body: n.body,
+          id: noticeId(n.convo),
+          title: hidden ? 'FIWICHAT' : n.title,
+          body: hidden ? 'Nouveau message' : n.body,
+          payload: n.convo,
           notificationDetails: const NotificationDetails(
             android: AndroidNotificationDetails(
               'messages',
@@ -164,6 +245,15 @@ class AppServices {
           ),
         );
       });
+      // L'appli a été ouverte en touchant une notification.
+      final launch = await _notifs.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) {
+        final payload = launch!.notificationResponse?.payload;
+        Timer(
+          const Duration(milliseconds: 600),
+          () => openConversation(payload),
+        );
+      }
     } catch (_) {}
   }
 }
@@ -179,7 +269,9 @@ class StartScreen extends StatefulWidget {
 class _StartScreenState extends State<StartScreen> {
   final _name = TextEditingController();
   late Identity _identity;
+  late Vault _vault;
   bool _loading = true;
+  bool _intro = false;
 
   @override
   void initState() {
@@ -189,17 +281,20 @@ class _StartScreenState extends State<StartScreen> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    // Coffre-fort : identité et historique chiffrés sur ce téléphone.
+    _vault = Vault(prefs);
+    await _vault.open();
+    await AppConfig.load(prefs, _vault);
     Identity? id;
     try {
-      final sk = prefs.getString('secret');
+      final sk = await _vault.readSecret();
       if (sk != null) id = Identity.fromBase64(sk);
-    } catch (_) {
-      // Ancienne version : nouvelle identité (et on repart d'un historique vide).
-      await prefs.remove('state');
-    }
+    } catch (_) {}
     if (id == null) {
+      // Première fois (ou clé illisible) : nouvelle identité, historique vide.
+      await _vault.deleteState();
       id = Identity.generate();
-      await prefs.setString('secret', id.secretBase64);
+      await _vault.writeSecret(id.secretBase64);
     }
     _identity = id;
     final saved = prefs.getString('name');
@@ -208,7 +303,17 @@ class _StartScreenState extends State<StartScreen> {
       await _go();
       return;
     }
-    setState(() => _loading = false);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _intro = prefs.getBool('introSeen') != true;
+    });
+  }
+
+  Future<void> _introDone() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('introSeen', true);
+    if (mounted) setState(() => _intro = false);
   }
 
   Future<void> _go() async {
@@ -217,7 +322,10 @@ class _StartScreenState extends State<StartScreen> {
     setState(() => _loading = true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('name', name);
-    final services = AppServices(MeshNode(me: _identity, myName: name));
+    final services = AppServices(
+      MeshNode(me: _identity, myName: name),
+      vault: _vault,
+    );
     try {
       await services.start();
     } catch (e) {
@@ -236,6 +344,7 @@ class _StartScreenState extends State<StartScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_intro && !_loading) return OnboardingScreen(onDone: _introDone);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -326,6 +435,25 @@ class HomeScreen extends StatelessWidget {
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => GuestScreen(services: services),
+                  ),
+                ),
+              ),
+              IconButton(
+                key: const Key('settings'),
+                icon: const Icon(Icons.settings_outlined),
+                tooltip: 'Réglages',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (ctx) => SettingsScreen(
+                      encrypted: services.vault?.encrypted ?? false,
+                      onShowIntro: () => Navigator.of(ctx).push(
+                        MaterialPageRoute(
+                          builder: (c2) => OnboardingScreen(
+                            onDone: () => Navigator.of(c2).pop(),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -986,6 +1114,80 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     widget.mesh.openConversation = widget.convo;
     widget.mesh.markRead(widget.convo);
+    AppServices.current?.clearNotice(widget.convo);
+  }
+
+  /// Appui long sur un message : copier ou effacer.
+  Future<void> _messageMenu(ChatMessage m) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (m.text.isNotEmpty)
+              ListTile(
+                key: const Key('msg-copy'),
+                leading: const Icon(Icons.copy),
+                title: const Text('Copier le texte'),
+                onTap: () => Navigator.pop(context, 'copy'),
+              ),
+            if (m.mine && !m.delivered && widget.convo != kGroupId)
+              ListTile(
+                leading: const Icon(Icons.refresh),
+                title: const Text('Renvoyer maintenant'),
+                onTap: () => Navigator.pop(context, 'resend'),
+              ),
+            ListTile(
+              key: const Key('msg-delete'),
+              leading: Icon(
+                Icons.delete_outline,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: const Text('Effacer de mon téléphone'),
+              subtitle: const Text('Les autres gardent leur copie.'),
+              onTap: () => Navigator.pop(context, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == 'copy') {
+      await Clipboard.setData(ClipboardData(text: m.text));
+      _toast('Texte copié.');
+    } else if (choice == 'delete') {
+      widget.mesh.deleteMessage(widget.convo, m);
+      _toast('Message effacé.');
+    } else if (choice == 'resend') {
+      final n = widget.mesh.resendPending(widget.convo, force: true);
+      _toast(n > 0 ? 'Renvoyé.' : 'Personne à portée pour l\'instant.');
+    }
+  }
+
+  Future<void> _clearAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Vider la conversation ?'),
+        content: const Text(
+          'Tous les messages, photos et vocaux de cette conversation seront effacés de ton téléphone. '
+          'Les autres gardent leur copie.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            key: const Key('clear-confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Vider'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) widget.mesh.clearConversation(widget.convo);
   }
 
   @override
@@ -1125,6 +1327,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 setState(() {});
               },
             ),
+          PopupMenuButton<String>(
+            key: const Key('chat-menu'),
+            onSelected: (v) {
+              if (v == 'clear') _clearAll();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'clear',
+                child: Text('Vider la conversation'),
+              ),
+            ],
+          ),
         ],
       ),
       body: SafeArea(
@@ -1164,59 +1378,64 @@ class _ChatScreenState extends State<ChatScreen> {
                         alignment: m.mine
                             ? Alignment.centerRight
                             : Alignment.centerLeft,
-                        child: Container(
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.78,
-                          ),
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: m.mine
-                                ? scheme.primaryContainer
-                                : scheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (isGroup && !m.mine)
+                        child: GestureDetector(
+                          key: Key('msg-${m.mid ?? i}'),
+                          onLongPress: () => _messageMenu(m),
+                          child: Container(
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.78,
+                            ),
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: m.mine
+                                  ? scheme.primaryContainer
+                                  : scheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (isGroup && !m.mine)
+                                  Text(
+                                    '${m.fromName} #${shortTag(m.fromId)}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: scheme.primary,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                if (m.media != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: 4,
+                                      bottom: 4,
+                                    ),
+                                    child: MediaBubble(message: m),
+                                  ),
+                                if (m.text.isNotEmpty)
+                                  Text(
+                                    m.text,
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                const SizedBox(height: 2),
                                 Text(
-                                  '${m.fromName} #${shortTag(m.fromId)}',
+                                  m.failed
+                                      ? '$time · personne à portée'
+                                      : (m.delivered ? '$time · ✓ reçu' : time),
                                   style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: scheme.primary,
-                                    fontSize: 13,
+                                    fontSize: 11,
+                                    color: m.failed
+                                        ? scheme.error
+                                        : scheme.onSurfaceVariant,
                                   ),
                                 ),
-                              if (m.media != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: 4,
-                                    bottom: 4,
-                                  ),
-                                  child: MediaBubble(message: m),
-                                ),
-                              if (m.text.isNotEmpty)
-                                Text(
-                                  m.text,
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                              const SizedBox(height: 2),
-                              Text(
-                                m.failed
-                                    ? '$time · personne à portée'
-                                    : (m.delivered ? '$time · ✓ reçu' : time),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: m.failed
-                                      ? scheme.error
-                                      : scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       );

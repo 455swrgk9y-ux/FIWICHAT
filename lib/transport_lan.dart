@@ -79,9 +79,28 @@ class LanTransport {
         if (b is int) onPeerBuild?.call(dg.address, b);
       } catch (_) {}
     });
-    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _beat());
+    _startTimer();
     _beat();
   }
+
+  bool _background = false;
+
+  void _startTimer() {
+    _timer?.cancel();
+    // En arrière-plan : un signal toutes les 5 s au lieu de 3 (batterie).
+    _timer = Timer.periodic(
+      Duration(seconds: _background ? 5 : 3),
+      (_) => _beat(),
+    );
+  }
+
+  void setBackground(bool bg) {
+    if (bg == _background) return;
+    _background = bg;
+    if (_timer != null) _startTimer();
+  }
+
+  Duration get beatEvery => Duration(seconds: _background ? 5 : 3);
 
   Future<void> stop() async {
     _timer?.cancel();

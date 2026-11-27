@@ -17,26 +17,66 @@ import 'package:pinenacl/x25519.dart';
 Uint8List _rand(int n) => PineNaClUtils.randombytes(n);
 
 class Identity {
-  Identity(this.signing, this.encryption);
+  Identity(
+    this.signing,
+    this.encryption, {
+    this.previous = const [],
+    int? encSince,
+  }) : encSince = encSince ?? DateTime.now().millisecondsSinceEpoch;
 
   factory Identity.generate() =>
       Identity(ed.SigningKey.generate(), PrivateKey.generate());
 
-  /// Format sauvegardé : "graine-signature.clé-chiffrement" en base64.
+  /// Format sauvegardé : "graine.clé[.ancienne-clé...]|date-de-la-clé" en base64.
+  /// L'ancien format "graine.clé" (sans date) reste lisible.
   factory Identity.fromBase64(String s) {
-    final parts = s.split('.');
-    if (parts.length != 2) throw const FormatException('ancienne clé');
+    final bar = s.split('|');
+    final parts = bar[0].split('.');
+    if (parts.length < 2) throw const FormatException('ancienne clé');
     return Identity(
       ed.SigningKey(seed: base64Decode(parts[0])),
       PrivateKey(base64Decode(parts[1])),
+      previous: [for (final k in parts.skip(2)) PrivateKey(base64Decode(k))],
+      encSince: bar.length > 1 ? int.tryParse(bar[1]) ?? 0 : 0,
     );
   }
 
   final ed.SigningKey signing;
+
+  /// Clé de chiffrement actuelle (annoncée aux autres).
   final PrivateKey encryption;
 
+  /// Anciennes clés de chiffrement, gardées quelques jours pour lire les
+  /// messages encore en route, puis effacées pour toujours.
+  final List<PrivateKey> previous;
+
+  /// Date de création de la clé actuelle (millisecondes).
+  final int encSince;
+
+  /// Nombre d'anciennes clés gardées (une par jour : 3 jours > kMaxAge).
+  static const int keepOld = 3;
+
+  /// Une nouvelle clé de chiffrement chaque jour : si quelqu'un vole le
+  /// téléphone plus tard, il ne peut pas lire les vieux messages enregistrés.
+  static const Duration rotateEvery = Duration(days: 1);
+
+  bool needsRotation([DateTime? now]) =>
+      (now ?? DateTime.now()).millisecondsSinceEpoch - encSince >=
+      rotateEvery.inMilliseconds;
+
+  /// Même identité (même code), nouvelle clé de chiffrement.
+  Identity rotated([DateTime? now]) => Identity(
+    signing,
+    PrivateKey.generate(),
+    previous: [encryption, ...previous].take(keepOld).toList(),
+    encSince: (now ?? DateTime.now()).millisecondsSinceEpoch,
+  );
+
+  /// Toutes les clés qui peuvent ouvrir un message (actuelle d'abord).
+  List<PrivateKey> get allEncryption => [encryption, ...previous];
+
   String get secretBase64 =>
-      '${base64Encode(signing.seed.asTypedList)}.${base64Encode(encryption.asTypedList)}';
+      '${[signing.seed.asTypedList, encryption.asTypedList, for (final k in previous) k.asTypedList].map(base64Encode).join('.')}|$encSince';
 
   /// Identifiant public = clé de signature (base64).
   String get id => base64Encode(signing.verifyKey.asTypedList);
@@ -167,11 +207,18 @@ OpenedPrivate? openPrivate(Identity me, String e, String c) {
   try {
     final data = base64Decode(c);
     if (data.length < 24 + 16) return null;
-    final box = Box(
-      myPrivateKey: me.encryption,
-      theirPublicKey: PublicKey(base64Decode(e)),
-    );
-    final plain = box.decrypt(EncryptedMessage.fromList(data));
+    final their = PublicKey(base64Decode(e));
+    Uint8List? plain;
+    for (final k in me.allEncryption) {
+      try {
+        plain = Box(
+          myPrivateKey: k,
+          theirPublicKey: their,
+        ).decrypt(EncryptedMessage.fromList(data));
+        break;
+      } catch (_) {}
+    }
+    if (plain == null) return null;
     final b = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
     final src = b['src'] as String;
     final ts = (b['ts'] as num).toInt();

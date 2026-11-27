@@ -281,6 +281,13 @@ class MediaStore {
   /// Un fichier que j'envoie (ou que j'avais déjà) : je peux le renvoyer à la demande.
   void hold(MediaMeta m, String path) => _held[m.fid] = (m, path);
 
+  /// Oublie un fichier (effacé par l'utilisateur) : on ne le renvoie plus.
+  void forget(String fid) {
+    _held.remove(fid);
+    _drop(fid);
+    if (_cache?.$1 == fid) _cache = null;
+  }
+
   /// Un message annonce ce fichier : on attend (ou on a déjà) ses morceaux.
   void expect(MediaMeta m) {
     if (_held.containsKey(m.fid)) return;
