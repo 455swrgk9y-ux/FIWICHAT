@@ -34,6 +34,14 @@ Le fichier est chiffré, découpé en morceaux de 9 Ko et envoyé doucement pour
 Bluetooth. Les morceaux perdus sont redemandés automatiquement. En privé, seul le destinataire
 peut ouvrir la photo : les relais transportent des morceaux illisibles.
 
+## Messages vocaux
+
+Bouton 🎤 à droite du champ de texte : on parle, puis ➤ pour envoyer (2 minutes maximum).
+Le son est compressé (AAC mono, ~4 Ko par seconde) et voyage comme une photo : chiffré,
+en morceaux, de téléphone en téléphone. On l'écoute dans l'appli avec ▶ / ⏸.
+Page invité : écoute partout ; enregistrement avec le micro du navigateur quand il l'autorise,
+sinon avec l'appli d'enregistrement du téléphone.
+
 ## Sécurité
 
 - **Tout est signé** : présence, salon, messages privés. Personne ne peut écrire sous le nom

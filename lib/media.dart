@@ -67,17 +67,22 @@ class MediaMeta {
     required this.key,
     required this.nonce,
     required this.hashes,
+    this.durationMs,
   });
 
   final String fid; // identifiant aléatoire du fichier
-  final String kind; // 'photo' ou 'video'
+  final String kind; // 'photo', 'video' ou 'audio' (message vocal)
   final String mime;
   final int size; // taille du fichier en clair
   final int n; // nombre de morceaux
   final String key, nonce; // base64
   final String hashes; // n empreintes de 8 caractères, à la suite
 
+  /// Durée d'un message vocal (millisecondes), si connue.
+  final int? durationMs;
+
   bool get isVideo => kind == 'video';
+  bool get isAudio => kind == 'audio';
   String hashOf(int i) => hashes.substring(i * 8, i * 8 + 8);
 
   String get extension => switch (mime) {
@@ -87,7 +92,11 @@ class MediaMeta {
     'video/webm' => 'webm',
     'video/quicktime' => 'mov',
     'video/3gpp' => '3gp',
-    _ => isVideo ? 'mp4' : 'jpg',
+    'audio/webm' => 'webm',
+    'audio/ogg' => 'ogg',
+    'audio/aac' => 'aac',
+    'audio/mpeg' => 'mp3',
+    _ => isAudio ? 'm4a' : (isVideo ? 'mp4' : 'jpg'),
   };
 
   Map<String, dynamic> toJson() => {
@@ -99,6 +108,7 @@ class MediaMeta {
     'key': key,
     'no': nonce,
     'hs': hashes,
+    if (durationMs != null) 'ms': durationMs,
   };
 
   /// Lit et vérifie une description reçue (null si elle est invalide).
@@ -107,7 +117,9 @@ class MediaMeta {
     final fid = j['f'], kind = j['k'], mime = j['t'], size = j['s'], n = j['n'];
     final key = j['key'], nonce = j['no'], hs = j['hs'];
     if (fid is! String || fid.isEmpty || fid.length > 40) return null;
-    if (kind != 'photo' && kind != 'video') return null;
+    if (kind != 'photo' && kind != 'video' && kind != 'audio') return null;
+    final ms = j['ms'];
+    if (ms != null && (ms is! int || ms < 0 || ms > 3600000)) return null;
     if (mime is! String || mime.length > 40) return null;
     if (size is! int || n is! int || n < 1 || n > kMaxChunks) return null;
     if (size < 0 || size > kMaxMediaBytes) return null;
@@ -132,6 +144,7 @@ class MediaMeta {
       key: key,
       nonce: nonce,
       hashes: hs,
+      durationMs: ms as int?,
     );
   }
 }
@@ -148,8 +161,8 @@ List<Uint8List> _split(Uint8List box) => [
     Uint8List.sublistView(box, i, min(i + kChunkBytes, box.length)),
 ];
 
-PreparedMedia _prepare((Uint8List, String, String, String) a) {
-  final (plain, kind, mime, fid) = a;
+PreparedMedia _prepare((Uint8List, String, String, String, int?) a) {
+  final (plain, kind, mime, fid, ms) = a;
   final key = _rand(32), nonce = _rand(24);
   final chunks = _split(secretboxSeal(plain, nonce, key));
   final meta = MediaMeta(
@@ -161,6 +174,7 @@ PreparedMedia _prepare((Uint8List, String, String, String) a) {
     key: base64Encode(key),
     nonce: base64Encode(nonce),
     hashes: chunks.map(chunkHash).join(),
+    durationMs: ms,
   );
   return PreparedMedia(meta, chunks);
 }
@@ -169,9 +183,14 @@ PreparedMedia _prepare((Uint8List, String, String, String) a) {
 Future<T> _bg<A, T>(T Function(A) f, A arg) => Isolate.run(() => f(arg));
 
 /// Chiffre et découpe un fichier (dans un fil séparé pour ne pas figer l'écran).
-Future<PreparedMedia> prepareMedia(Uint8List plain, String kind, String mime) {
+Future<PreparedMedia> prepareMedia(
+  Uint8List plain,
+  String kind,
+  String mime, {
+  int? durationMs,
+}) {
   final fid = base64Url.encode(_rand(12));
-  return _bg(_prepare, (plain, kind, mime, fid));
+  return _bg(_prepare, (plain, kind, mime, fid, durationMs));
 }
 
 Uint8List? _assemble((List<Uint8List>, String, String) a) {

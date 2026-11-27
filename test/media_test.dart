@@ -49,7 +49,10 @@ void main() {
     wire = [];
     lost.clear();
     tmp = await Directory.systemTemp.createTemp('fiwi-media');
-    nodes = {for (final n in names) n: MeshNode(me: Identity.generate(), myName: 'Nom$n')};
+    nodes = {
+      for (final n in names)
+        n: MeshNode(me: Identity.generate(), myName: 'Nom$n'),
+    };
     for (final n in names) {
       nodes[n]!.attachMedia(Directory('${tmp.path}/$n'));
     }
@@ -63,7 +66,15 @@ void main() {
     for (var i = 0; i < names.length - 1; i++) {
       final a = nodes[names[i]]!, b = nodes[names[i + 1]]!;
       final lossy = names[i] == 'C';
-      a.addLink(MemLink('to-${names[i + 1]}', b, 'to-${names[i]}', wire, lose: lossy ? lose : null));
+      a.addLink(
+        MemLink(
+          'to-${names[i + 1]}',
+          b,
+          'to-${names[i]}',
+          wire,
+          lose: lossy ? lose : null,
+        ),
+      );
       b.addLink(MemLink('to-${names[i]}', a, 'to-${names[i + 1]}', wire));
     }
     for (final n in nodes.values) {
@@ -92,8 +103,21 @@ void main() {
   test('une photo du salon traverse les relais, intacte', () async {
     final a = nodes['A']!, d = nodes['D']!;
     final photo = fakePhoto(100000);
-    expect(await a.sendMedia(kGroupId, photo, kind: 'photo', mime: 'image/jpeg', caption: 'Coucou'), isTrue);
-    await waitFor(() => d.conversations[kGroupId]!.isNotEmpty && d.conversations[kGroupId]!.single.path != null);
+    expect(
+      await a.sendMedia(
+        kGroupId,
+        photo,
+        kind: 'photo',
+        mime: 'image/jpeg',
+        caption: 'Coucou',
+      ),
+      isTrue,
+    );
+    await waitFor(
+      () =>
+          d.conversations[kGroupId]!.isNotEmpty &&
+          d.conversations[kGroupId]!.single.path != null,
+    );
     final m = d.conversations[kGroupId]!.single;
     expect(m.text, 'Coucou');
     expect(m.media!.kind, 'photo');
@@ -109,12 +133,23 @@ void main() {
     wire.clear();
     await a.sendMedia(d.myId, video, kind: 'video', mime: 'video/mp4');
     await waitFor(() => d.conversations[a.myId]?.single.path != null);
-    expect(await File(d.conversations[a.myId]!.single.path!).readAsBytes(), video);
+    expect(
+      await File(d.conversations[a.myId]!.single.path!).readAsBytes(),
+      video,
+    );
     for (final r in ['B', 'C']) {
       final n = nodes[r]!;
-      expect(n.conversations.keys.where((k) => k != kGroupId), isEmpty, reason: r);
+      expect(
+        n.conversations.keys.where((k) => k != kGroupId),
+        isEmpty,
+        reason: r,
+      );
       final files = Directory('${tmp.path}/$r');
-      expect(files.existsSync() ? files.listSync() : const [], isEmpty, reason: '$r ne garde aucun fichier');
+      expect(
+        files.existsSync() ? files.listSync() : const [],
+        isEmpty,
+        reason: '$r ne garde aucun fichier',
+      );
     }
     // Sur le réseau : ni la vidéo en clair, ni l'identité de A.
     final all = wire.join('\n');
@@ -139,19 +174,74 @@ void main() {
 
   test('un faux morceau est refusé et pas relayé', () async {
     final a = nodes['A']!, b = nodes['B']!;
-    await a.sendMedia(kGroupId, fakePhoto(20000), kind: 'photo', mime: 'image/jpeg');
+    await a.sendMedia(
+      kGroupId,
+      fakePhoto(20000),
+      kind: 'photo',
+      mime: 'image/jpeg',
+    );
     final fid = a.conversations[kGroupId]!.single.media!.fid;
     // On attend que les vrais morceaux ne soient plus « récents ».
     await Future.delayed(const Duration(milliseconds: 3200));
     final before = wire.length;
-    final fake = jsonEncode({'t': 'fc', 'id': 'faux1', 'h': 0, 'f': fid, 'i': 0, 'd': base64Encode(Uint8List(500))});
+    final fake = jsonEncode({
+      't': 'fc',
+      'id': 'faux1',
+      'h': 0,
+      'f': fid,
+      'i': 0,
+      'd': base64Encode(Uint8List(500)),
+    });
     b.receive(fake, 'to-A');
     await Future.delayed(const Duration(milliseconds: 100));
-    expect(wire.length, before, reason: 'B ne doit pas relayer un faux morceau');
+    expect(
+      wire.length,
+      before,
+      reason: 'B ne doit pas relayer un faux morceau',
+    );
+  });
+
+  test('un message vocal privé arrive avec sa durée', () async {
+    final a = nodes['A']!, d = nodes['D']!;
+    final voice = fakePhoto(40000);
+    await a.sendMedia(
+      d.myId,
+      voice,
+      kind: 'audio',
+      mime: 'audio/mp4',
+      durationMs: 12500,
+    );
+    await waitFor(() => d.conversations[a.myId]?.single.path != null);
+    final m = d.conversations[a.myId]!.single;
+    expect(m.media!.isAudio, isTrue);
+    expect(m.media!.durationMs, 12500);
+    expect(m.path, endsWith('.m4a'));
+    expect(await File(m.path!).readAsBytes(), voice);
+  });
+
+  test('une durée fausse rend la description invalide', () {
+    final ok = {
+      'f': 'x',
+      'k': 'audio',
+      't': 'audio/mp4',
+      's': 10,
+      'n': 1,
+      'key': base64Encode(Uint8List(32)),
+      'no': base64Encode(Uint8List(24)),
+      'hs': 'AAAAAAAA',
+    };
+    expect(MediaMeta.fromJson(ok), isNotNull);
+    expect(MediaMeta.fromJson({...ok, 'ms': -5}), isNull);
+    expect(MediaMeta.fromJson({...ok, 'k': 'virus'}), isNull);
   });
 
   test('trop lourd : refusé tout de suite', () async {
-    final ok = await nodes['A']!.sendMedia(kGroupId, Uint8List(kMaxMediaBytes + 1), kind: 'video', mime: 'video/mp4');
+    final ok = await nodes['A']!.sendMedia(
+      kGroupId,
+      Uint8List(kMaxMediaBytes + 1),
+      kind: 'video',
+      mime: 'video/mp4',
+    );
     expect(ok, isFalse);
   });
 

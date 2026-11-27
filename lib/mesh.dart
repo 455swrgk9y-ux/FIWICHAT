@@ -375,7 +375,8 @@ class MeshNode {
     if (p['m'] != null) p['m'],
   ];
 
-  static String mediaLabel(MediaMeta m) => m.isVideo ? '🎬 Vidéo' : '📷 Photo';
+  static String mediaLabel(MediaMeta m) =>
+      m.isAudio ? '🎤 Message vocal' : (m.isVideo ? '🎬 Vidéo' : '📷 Photo');
 
   bool _tooOld(int ts) =>
       DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) >
@@ -603,12 +604,18 @@ class MeshNode {
     required String kind,
     required String mime,
     String caption = '',
+    int? durationMs,
   }) async {
     final store = media;
     if (store == null || bytes.isEmpty || bytes.length > kMaxMediaBytes)
       return false;
     if (caption.length > kMaxText) return false;
-    final prepared = await prepareMedia(bytes, kind, mime);
+    final prepared = await prepareMedia(
+      bytes,
+      kind,
+      mime,
+      durationMs: durationMs,
+    );
     final meta = prepared.meta;
     final path = store.pathFor(meta);
     await store.dir.create(recursive: true);

@@ -15,6 +15,7 @@ import 'media.dart';
 import 'mesh.dart';
 import 'radios.dart';
 import 'updates.dart';
+import 'voice.dart';
 import 'transport_lan.dart';
 import 'transport_nearby.dart';
 
@@ -894,6 +895,91 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _text = TextEditingController();
+  final _voice = VoiceRecorder();
+  Timer? _voiceTimer;
+
+  /// Bouton micro : démarre l'enregistrement (2 minutes au plus).
+  Future<void> _startVoice() async {
+    try {
+      if (!await _voice.start()) {
+        _toast('Autorise le micro pour envoyer un message vocal.');
+        return;
+      }
+    } catch (_) {
+      _toast('Le micro ne répond pas.');
+      return;
+    }
+    _voiceTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (!mounted) return;
+      if (_voice.elapsed >= kMaxVoice) {
+        _stopVoice(send: true);
+      } else {
+        setState(() {});
+      }
+    });
+    setState(() {});
+  }
+
+  Future<void> _stopVoice({required bool send}) async {
+    _voiceTimer?.cancel();
+    _voiceTimer = null;
+    if (!send) {
+      await _voice.cancel();
+      if (mounted) setState(() {});
+      return;
+    }
+    final r = await _voice.stop();
+    if (mounted) setState(() {});
+    if (r == null) {
+      _toast('Message vocal trop court.');
+      return;
+    }
+    final (file, d) = r;
+    final bytes = await file.readAsBytes();
+    try {
+      file.deleteSync();
+    } catch (_) {}
+    final ok = await widget.mesh.sendMedia(
+      widget.convo,
+      bytes,
+      kind: 'audio',
+      mime: 'audio/mp4',
+      durationMs: d.inMilliseconds,
+    );
+    if (!ok)
+      _toast('Envoi impossible : la personne n\'est pas encore connue ici.');
+  }
+
+  Widget _recordingBar() {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      key: const Key('recording'),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Annuler',
+            onPressed: () => _stopVoice(send: false),
+            icon: Icon(Icons.delete_outline, color: scheme.error, size: 28),
+          ),
+          Icon(Icons.fiber_manual_record, color: scheme.error, size: 18),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Enregistrement… ${clock(_voice.elapsed)} / ${clock(kMaxVoice)}',
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+          IconButton.filled(
+            key: const Key('voice-send'),
+            tooltip: 'Envoyer le vocal',
+            onPressed: () => _stopVoice(send: true),
+            icon: const Icon(Icons.send),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -905,6 +991,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     widget.mesh.openConversation = null;
+    _voiceTimer?.cancel();
+    _voice.dispose();
     _text.dispose();
     super.dispose();
   }
@@ -1137,48 +1225,56 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-              child: Row(
-                children: [
-                  IconButton(
-                    key: const Key('attach'),
-                    onPressed: _pickMedia,
-                    tooltip: 'Envoyer une photo ou une vidéo',
-                    icon: const Icon(
-                      Icons.add_photo_alternate_outlined,
-                      size: 28,
-                    ),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _text,
-                      textCapitalization: TextCapitalization.sentences,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: InputDecoration(
-                        hintText: 'Écris un message',
-                        filled: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
+            if (_voice.recording)
+              _recordingBar()
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      key: const Key('attach'),
+                      onPressed: _pickMedia,
+                      tooltip: 'Envoyer une photo ou une vidéo',
+                      icon: const Icon(
+                        Icons.add_photo_alternate_outlined,
+                        size: 28,
                       ),
-                      onSubmitted: (_) => _send(),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _send,
-                    icon: const Icon(Icons.send),
-                  ),
-                ],
+                    Expanded(
+                      child: TextField(
+                        controller: _text,
+                        textCapitalization: TextCapitalization.sentences,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: InputDecoration(
+                          hintText: 'Écris un message',
+                          filled: true,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                        onSubmitted: (_) => _send(),
+                      ),
+                    ),
+                    IconButton(
+                      key: const Key('mic'),
+                      onPressed: _startVoice,
+                      tooltip: 'Message vocal',
+                      icon: const Icon(Icons.mic_none, size: 28),
+                    ),
+                    IconButton.filled(
+                      onPressed: _send,
+                      icon: const Icon(Icons.send),
+                    ),
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -1293,7 +1389,9 @@ class MediaBubble extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final ready = path != null && File(path).existsSync();
     Widget body;
-    if (ready && !m.isVideo) {
+    if (m.isAudio) {
+      body = VoiceBubble(message: message, ready: ready);
+    } else if (ready && !m.isVideo) {
       body = GestureDetector(
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(
