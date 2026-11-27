@@ -4,7 +4,13 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Build
+import android.provider.Settings
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pManager
@@ -37,6 +43,8 @@ class MainActivity : FlutterActivity() {
                     }
                     "startGuestHotspot" -> startGuestHotspot(result)
                     "getApkPath" -> result.success(applicationInfo.sourceDir)
+                    "radioStatus" -> result.success(radioStatus())
+                    "openRadioSettings" -> result.success(openRadioSettings(call.argument<String>("which")))
                     "shareApk" -> shareApk(call.argument<String>("via"), result)
                     "startKeepAlive" -> {
                         try {
@@ -53,6 +61,50 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /** Quelles radios ce téléphone possède, et lesquelles sont allumées. */
+    private fun radioStatus(): Map<String, Boolean> {
+        val pm = packageManager
+        val bt = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val loc = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        fun safe(f: () -> Boolean): Boolean = try { f() } catch (e: Exception) { false }
+        return mapOf(
+            "hasBluetooth" to pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH),
+            "hasBle" to pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE),
+            "hasWifiDirect" to pm.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT),
+            "hasWifiAware" to pm.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE),
+            "hasNfc" to pm.hasSystemFeature(PackageManager.FEATURE_NFC),
+            "bluetoothOn" to safe { bt?.isEnabled == true },
+            "wifiOn" to safe { wifi?.isWifiEnabled == true },
+            "locationOn" to safe { loc?.isLocationEnabled == true },
+        )
+    }
+
+    /** Ouvre l'écran Android qui permet d'allumer une radio. */
+    private fun openRadioSettings(which: String?): Boolean {
+        val intents = when (which) {
+            "bluetooth" -> listOf(
+                Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                Intent(Settings.ACTION_BLUETOOTH_SETTINGS),
+            )
+            "wifi" -> listOf(
+                if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_WIFI) else Intent(Settings.ACTION_WIFI_SETTINGS),
+                Intent(Settings.ACTION_WIFI_SETTINGS),
+            )
+            "location" -> listOf(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            else -> listOf(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+        }
+        for (i in intents) {
+            try {
+                startActivity(i)
+                return true
+            } catch (e: Exception) {
+                // Pas autorisé ou pas disponible : on essaie l'écran suivant.
+            }
+        }
+        return false
     }
 
     private fun acquireMulticastLock() {

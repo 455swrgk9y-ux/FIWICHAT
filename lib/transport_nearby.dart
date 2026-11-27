@@ -47,10 +47,11 @@ class NearbyTransport {
         statuses[Permission.nearbyWifiDevices]?.isGranted == true;
   }
 
-  Future<void> start() async {
+  Future<void> start({bool askPermissions = true}) async {
     if (!Platform.isAndroid) return;
+    error = null;
     try {
-      await requestPermissions();
+      if (askPermissions) await requestPermissions();
       // Un nom neutre : on ne montre pas le pseudo aux appareils inconnus.
       const nick = 'fiwichat';
       await Nearby().startAdvertising(
@@ -106,7 +107,21 @@ class NearbyTransport {
     mesh.removeLink('nb:$id');
   }
 
+  /// Relance la recherche (ex. quand le Bluetooth ou la localisation vient d'être allumé).
+  /// Les liens déjà établis restent en place.
+  Future<void> restartSearch() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Nearby().stopAdvertising();
+      await Nearby().stopDiscovery();
+    } catch (_) {}
+    _pending.clear();
+    running = false;
+    await start(askPermissions: false);
+  }
+
   Future<void> stop() async {
+    running = false;
     try {
       await Nearby().stopAdvertising();
       await Nearby().stopDiscovery();

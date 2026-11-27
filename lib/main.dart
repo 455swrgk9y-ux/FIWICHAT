@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'crypto.dart';
 import 'guest_server.dart';
 import 'mesh.dart';
+import 'radios.dart';
 import 'transport_lan.dart';
 import 'transport_nearby.dart';
 
@@ -54,6 +55,11 @@ class AppServices {
   final NearbyTransport nearby;
   final GuestServer guests;
   final _notifs = FlutterLocalNotificationsPlugin();
+
+  /// État des radios (Bluetooth, Wi-Fi, localisation), relu toutes les 5 s.
+  final radios = ValueNotifier<RadioStatus>(const RadioStatus());
+  Timer? _radioTimer;
+  int _radioTick = 0;
   int _notifId = 0;
 
   Timer? _saveTimer;
@@ -80,10 +86,34 @@ class AppServices {
     } catch (_) {}
     await _initNotifications();
     await nearby.start();
+    await _watchRadios();
+    _radioTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _watchRadios(),
+    );
     try {
       // Android : garde FIWICHAT actif en arrière-plan pour recevoir et relayer.
       await _wifiChannel.invokeMethod('startKeepAlive');
     } catch (_) {}
+  }
+
+  void stopWatchingRadios() => _radioTimer?.cancel();
+
+  /// Dès qu'une radio est rallumée, FIWICHAT relance la recherche tout seul.
+  Future<void> _watchRadios() async {
+    final before = radios.value;
+    final now = await RadioStatus.read();
+    radios.value = now;
+    if (!now.known) return;
+    final turnedOn =
+        (now.bluetoothOn && !before.bluetoothOn) ||
+        (now.locationOn && !before.locationOn) ||
+        (now.wifiOn && !before.wifiOn);
+    // Si la recherche a échoué, on réessaie calmement (toutes les minutes).
+    final retry = !nearby.running && _radioTick++ % 12 == 0;
+    if (now.nearbyReady && (turnedOn || retry)) {
+      await nearby.restartSearch();
+    }
   }
 
   Future<void> _initNotifications() async {
@@ -310,7 +340,16 @@ class HomeScreen extends StatelessWidget {
           body: ListView(
             padding: const EdgeInsets.only(bottom: 110),
             children: [
-              _LinksBar(mesh: mesh),
+              InkWell(
+                key: const Key('links-bar'),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ConnectionsScreen(services: services),
+                  ),
+                ),
+                child: _LinksBar(mesh: mesh),
+              ),
+              _RadiosBanner(services: services),
               if (mesh.nameUsedByOther(mesh.myName))
                 Card(
                   margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -445,11 +484,289 @@ class _LinksBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Wrap(
         runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           chip(Icons.wifi, 'Wi-Fi', mesh.linkCount('wifi')),
           chip(Icons.bluetooth_searching, 'Proches', mesh.linkCount('proche')),
           chip(Icons.qr_code_2, 'Invités', mesh.linkCount('invite')),
+          Icon(Icons.chevron_right, color: scheme.outline),
         ],
+      ),
+    );
+  }
+}
+
+// ======================= Radios / connexions =======================
+
+/// Bandeau sur l'accueil quand une radio utile est éteinte.
+class _RadiosBanner extends StatelessWidget {
+  const _RadiosBanner({required this.services});
+  final AppServices services;
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<RadioStatus>(
+    valueListenable: services.radios,
+    builder: (context, r, _) {
+      final off = r.off;
+      if (off.isEmpty) return const SizedBox.shrink();
+      return Card(
+        key: const Key('radios-banner'),
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Pour trouver plus de téléphones, allume : ${off.map(radioLabel).join(', ')}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final w in off)
+                    TextButton.icon(
+                      onPressed: () => openRadioSettings(w),
+                      icon: Icon(_radioIcon(w)),
+                      label: Text(radioAction(w)),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+IconData _radioIcon(String w) => switch (w) {
+  'bluetooth' => Icons.bluetooth,
+  'wifi' => Icons.wifi,
+  _ => Icons.location_on,
+};
+
+/// Écran « Connexions » : toutes les façons dont FIWICHAT relie les téléphones.
+class ConnectionsScreen extends StatelessWidget {
+  const ConnectionsScreen({super.key, required this.services});
+  final AppServices services;
+
+  @override
+  Widget build(BuildContext context) {
+    final mesh = services.mesh;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Connexions')),
+      body: StreamBuilder<void>(
+        stream: mesh.changes,
+        builder: (context, _) => ValueListenableBuilder<RadioStatus>(
+          valueListenable: services.radios,
+          builder: (context, r, _) {
+            final nearbyOk = r.nearbyReady;
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              children: [
+                const Text(
+                  'FIWICHAT utilise toutes les radios de ton téléphone en même temps, '
+                  'et choisit toute seule la meilleure. Tu n\'as rien à régler : '
+                  'il suffit que tout soit allumé.',
+                  style: TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 16),
+                _RadioRow(
+                  icon: Icons.wifi,
+                  title: 'Wi-Fi (même réseau)',
+                  detail:
+                      'Téléphones sur la même box, sur le partage de connexion d\'un '
+                      'téléphone, ou sur le Wi-Fi FIWICHAT.',
+                  on: r.wifiOn,
+                  count: mesh.linkCount('wifi'),
+                  fix: 'wifi',
+                ),
+                _RadioRow(
+                  icon: Icons.bluetooth,
+                  title: 'Bluetooth',
+                  detail: r.hasBle
+                      ? 'Bluetooth classique et basse consommation (BLE). Trouve les '
+                            'téléphones autour de toi, environ 10 à 50 m.'
+                      : 'Trouve les téléphones autour de toi, environ 10 m.',
+                  on: r.bluetoothOn,
+                  available: r.hasBluetooth,
+                  count: mesh.linkCount('proche'),
+                  fix: 'bluetooth',
+                ),
+                _RadioRow(
+                  icon: Icons.wifi_tethering,
+                  title: 'Wi-Fi Direct',
+                  detail:
+                      'Wi-Fi de téléphone à téléphone, sans box. Plus rapide et plus loin '
+                      'que le Bluetooth. S\'active tout seul après le Bluetooth.',
+                  on: nearbyOk && r.wifiOn,
+                  available: r.hasWifiDirect,
+                  fix: r.wifiOn
+                      ? (r.bluetoothOn ? 'location' : 'bluetooth')
+                      : 'wifi',
+                ),
+                if (r.hasWifiAware)
+                  _RadioRow(
+                    icon: Icons.radar,
+                    title: 'Wi-Fi Aware',
+                    detail: 'Ton téléphone sait aussi se relier en Wi-Fi Aware. Automatique.',
+                    on: nearbyOk && r.wifiOn,
+                    fix: r.wifiOn
+                        ? (r.bluetoothOn ? 'location' : 'bluetooth')
+                        : 'wifi',
+                  ),
+                _RadioRow(
+                  icon: Icons.location_on,
+                  title: 'Localisation',
+                  detail:
+                      'Android l\'exige pour chercher les appareils proches. FIWICHAT '
+                      'n\'utilise pas ta position et ne l\'envoie à personne.',
+                  on: r.locationOn,
+                  fix: 'location',
+                ),
+                _RadioRow(
+                  icon: Icons.qr_code_2,
+                  title: 'Navigateur (invités)',
+                  detail: 'Les personnes sans l\'appli discutent depuis leur navigateur.',
+                  on: true,
+                  count: mesh.linkCount('invite'),
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.cell_tower),
+                            SizedBox(width: 8),
+                            Text(
+                              'Et la radio ?',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Les téléphones n\'ont pas de radio libre pour discuter entre eux : '
+                          'leurs seules radios sont le Wi-Fi, le Bluetooth${r.hasNfc ? ', le NFC (quelques centimètres)' : ''} '
+                          'et le réseau mobile (qui passe par l\'opérateur). FIWICHAT utilise '
+                          'déjà toutes celles qui marchent sans internet.\n\n'
+                          'Pour aller beaucoup plus loin, il faut chaîner les téléphones : '
+                          'chaque téléphone FIWICHAT relaie les messages des autres, donc '
+                          'plus il y a de monde, plus ça porte loin.',
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _RadioRow extends StatelessWidget {
+  const _RadioRow({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.on,
+    this.available = true,
+    this.count,
+    this.fix,
+  });
+  final IconData icon;
+  final String title, detail;
+  final bool on, available;
+  final int? count;
+  final String? fix;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final String status;
+    final Color color;
+    if (!available) {
+      status = 'Pas sur ce téléphone';
+      color = scheme.outline;
+    } else if (!on) {
+      status = 'Éteint';
+      color = scheme.error;
+    } else {
+      final n = count;
+      status = n == null
+          ? 'Actif'
+          : n == 0
+          ? 'Actif · personne pour l\'instant'
+          : 'Actif · $n téléphone${n > 1 ? 's' : ''}';
+      color = brand;
+    }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              backgroundColor: available && on
+                  ? brand
+                  : scheme.surfaceContainerHighest,
+              foregroundColor: available && on ? Colors.white : scheme.outline,
+              child: Icon(icon),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    status,
+                    style: TextStyle(color: color, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    detail,
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                  if (available && !on && fix != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => openRadioSettings(fix!),
+                        icon: Icon(_radioIcon(fix!)),
+                        label: Text(radioAction(fix!)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -56,6 +56,14 @@ Pas de serveur, pas de compte, pas de données mobiles.
 3. **Invités** : par le réseau DIRECT-FC-FIWICHAT, voir plus haut.
 4. Si rien n'apparaît : bouton ⓘ, puis taper l'adresse de l'autre téléphone.
 
+Radios utilisées, toutes en même temps : Wi-Fi (même réseau, partage de connexion, Wi-Fi
+FIWICHAT), Bluetooth classique, Bluetooth basse consommation (BLE), Wi-Fi Direct et Wi-Fi Aware
+(ces quatre-là via Nearby Connections, qui choisit la meilleure). Touche la barre
+« Wi-Fi / Proches / Invités » pour voir l'écran **Connexions**. Si le Bluetooth, le Wi-Fi ou la
+localisation est éteint, l'accueil propose de l'allumer, et la recherche repart toute seule.
+Les téléphones n'ont pas d'autre radio utilisable entre eux (le NFC ne porte qu'à quelques
+centimètres, le réseau mobile passe par l'opérateur).
+
 ## Installer sur Android
 
 L'APK (le fichier d'installation) est fabriqué automatiquement par GitHub :
