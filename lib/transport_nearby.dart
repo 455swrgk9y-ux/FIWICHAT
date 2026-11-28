@@ -76,6 +76,14 @@ class NearbyTransport {
   final Map<String, _Seen> _seen = {};
   final Set<String> _connecting = {};
   final Set<String> _connected = {};
+
+  /// Pour chaque téléphone relié : son nom et le dernier paquet reçu de lui.
+  final Map<String, String> _names = {};
+  final Map<String, DateTime> _lastRx = {};
+
+  /// Une liaison qui ne reçoit plus rien depuis 75 s est à moitié cassée
+  /// (un seul des deux téléphones la croit ouverte) : on la refait.
+  static const Duration kSilent = Duration(seconds: 75);
   Timer? _timer;
   bool running = false;
   String? error;
@@ -153,6 +161,7 @@ class NearbyTransport {
         onEndpointFound: (id, theirName, serviceId) {
           if (_connected.contains(id)) return;
           _seen[id] = _Seen(theirName);
+          _names[id] = theirName;
           if (shouldInitiate(token, theirName)) _call(id);
         },
         onEndpointLost: (id) {
@@ -175,6 +184,10 @@ class NearbyTransport {
   /// Réessaie les téléphones vus mais pas reliés.
   void _retry() {
     final now = DateTime.now();
+    for (final id in _connected.toList()) {
+      final last = _lastRx[id];
+      if (last != null && now.difference(last) > kSilent) _reconnect(id);
+    }
     for (final e in _seen.entries.toList()) {
       final id = e.key, s = e.value;
       if (_connected.contains(id) || _connecting.contains(id)) continue;
@@ -214,12 +227,14 @@ class NearbyTransport {
 
   void _onInitiated(String id, ConnectionInfo info) {
     _connecting.add(id);
+    _names[id] = info.endpointName;
     Nearby()
         .acceptConnection(
           id,
           onPayLoadRecieved: (endpointId, payload) {
             final bytes = payload.bytes;
             if (payload.type != PayloadType.BYTES || bytes == null) return;
+            _lastRx[endpointId] = DateTime.now();
             try {
               mesh.receive(utf8.decode(bytes), 'nb:$endpointId');
             } catch (_) {}
@@ -236,6 +251,7 @@ class NearbyTransport {
     if (status == Status.CONNECTED) {
       _connected.add(id);
       _seen.remove(id);
+      _lastRx[id] = DateTime.now();
       mesh.addLink(NearbyLink(id, onError: _onSendError));
     }
     // Sinon : l'essai suivant se fera tout seul (_retry).
@@ -244,17 +260,26 @@ class NearbyTransport {
   void _onDisconnected(String id) {
     _connecting.remove(id);
     _connected.remove(id);
+    _lastRx.remove(id);
     mesh.removeLink('nb:$id');
+    // On le garde dans la liste : il sera rappelé s'il est encore là.
+    final name = _names[id];
+    if (name != null) _seen.putIfAbsent(id, () => _Seen(name));
+  }
+
+  /// Coupe une liaison muette et la refait.
+  void _reconnect(String id) {
+    try {
+      Nearby().disconnectFromEndpoint(id);
+    } catch (_) {}
+    _onDisconnected(id);
+    _seen[id]?.lastTry = null;
   }
 
   /// Un envoi impossible : la liaison est sûrement coupée.
   void _onSendError(String id) {
     if (!_connected.contains(id)) return;
-    _connected.remove(id);
-    mesh.removeLink('nb:$id');
-    try {
-      Nearby().disconnectFromEndpoint(id);
-    } catch (_) {}
+    _reconnect(id);
   }
 
   /// Relance la recherche (ex. quand le Bluetooth ou la localisation vient d'être allumé).

@@ -847,6 +847,16 @@ class ConnectionsScreen extends StatelessWidget {
                   'il suffit que tout soit allumé.',
                   style: TextStyle(fontSize: 16),
                 ),
+                const SizedBox(height: 8),
+                Text(
+                  'Version de FIWICHAT : 1.0.${services.updater.myBuild ?? '?'}'
+                  '${Platform.isAndroid ? ' · Bluetooth : ${services.nearby.running ? 'actif' : 'inactif'}, ${services.nearby.connectedCount} relié(s), ${services.nearby.waitingCount} en cours' : ''}',
+                  key: const Key('version-line'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 const SizedBox(height: 16),
                 _RadioRow(
                   icon: Icons.wifi,
